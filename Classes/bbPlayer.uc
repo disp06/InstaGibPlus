@@ -606,6 +606,70 @@ var int HitMarkerTestDamage;
 var int HitMarkerTestTeam;
 
 var IGPlus_ServerMove IGPlus_ServerMove_FreeList;
+
+// Jitter Compensation (bEnableJitterCompensation), server side: a move queue
+// for a player whose packets arrive late or in clumps. See IGPlus_JCIntercept.
+// The tuning numbers, all in one place. A slack is a number of the client's
+// move intervals plus a number of server ticks. They are first guesses: the
+// [JITTER-SUMMARY] line is there to replace them with measured ones.
+const IGPLUS_JC_ENTER_FRAMES = 1.0; // a move later than this queues the player
+const IGPLUS_JC_ENTER_TICKS = 2.0;
+const IGPLUS_JC_LEAVE_FRAMES = 0.5; // lateness under this counts as on time again
+const IGPLUS_JC_LEAVE_TICKS = 1.5;
+const IGPLUS_JC_LEAVE_DELAY_TICKS = 1.0; // the queue is left with no more delay than this
+const IGPLUS_JC_PEAK_TIME = 4.0;    // seconds until a late packet is mostly forgotten
+const IGPLUS_JC_DRAIN = 0.05;       // the clock runs at most this much fast
+const IGPLUS_JC_GRACE = 1.5;        // the next move is late after this many move intervals
+const IGPLUS_JC_MAXQUEUE = 128;     // moves kept for one player
+const IGPLUS_JC_WARMUP = 5.0;        // seconds a new arrival measure runs before it counts
+var bool IGPlus_JCPlaying;          // a queued move is running (IGPlus_JCRunHead)
+var bool IGPlus_JCKept;             // IGPlus_JCIntercept kept the move it was just shown
+var bool IGPlus_JCSeen;             // a state's xxServerMove already showed this move to IGPlus_JCIntercept
+var bool IGPlus_JCQueued;           // our moves wait in the queue
+var bool IGPlus_JCHeld;             // no move will run for a while: the other clients hold us still (IGPlus_JCHold)
+var IGPlus_ServerMove IGPlus_JCHead; // the queue, oldest first
+var int IGPlus_JCCount;
+var float IGPlus_JCDelay;           // how far the playout clock is behind the client's clock
+var float IGPlus_JCClockTime;       // Level.TimeSeconds of the clock's last advance
+var float IGPlus_JCLastRun;         // Level.TimeSeconds a queued move last ran
+var float IGPlus_JCOverNow;         // time above the cap in the stall going on
+var float IGPlus_JCNewestTS;        // newest move that arrived
+var float IGPlus_JCMoveLen;         // the client's usual move interval (average move length)
+var float IGPlus_JCMeasureStart;    // Level.TimeSeconds the arrival measure (re)started
+var float IGPlus_JCPeak;            // usual lateness: the latest packets of the last seconds
+var int IGPlus_JCDelayMs;           // IGPlus_JCDelay in real ms, 0 when not queued. Sent to our client.
+var float IGPlus_JCLogTS;
+var float IGPlus_JCEnterTime;
+// The arrival measure. It runs for every player, whatever the setting.
+var bool IGPlus_JCHaveMin;
+var float IGPlus_JCMinCur;          // lowest (arrival time - timestamp) this second
+var float IGPlus_JCMinPrev[3];      // and in the 3 seconds before
+var float IGPlus_JCMinBucketEnd;
+var float IGPlus_JCWinMin;          // the lowest of those: the client's clock seen from here
+var float IGPlus_JCTickMaxTS;       // newest timestamp among this tick's arrivals
+var float IGPlus_JCTickLen;         // average server tick (AverageServerDeltaTime starts at 0 and takes seconds to get there)
+var float IGPlus_JCLastArrival;     // Level.TimeSeconds of the last move that arrived
+var float IGPlus_JCLastArrivalTS;
+// This map's numbers for the [JITTER-SUMMARY] line (IGPlus_JCLogSummary).
+var bool IGPlus_JCStatLogged;
+var int IGPlus_JCStatMoves;
+var int IGPlus_JCStatUnder1;
+var int IGPlus_JCStatUnder2;
+var int IGPlus_JCStatOver50;
+var float IGPlus_JCStatLateSum;
+var float IGPlus_JCStatLateMax;
+var float IGPlus_JCStatTickSum;
+var float IGPlus_JCStatTickMax;
+var float IGPlus_JCStatGapMax;
+var int IGPlus_JCStatGap50;
+var int IGPlus_JCStatGap100;
+var int IGPlus_JCStatLongMoves;
+var int IGPlus_JCStatQueuedMoves;
+var int IGPlus_JCStatEnters;
+var int IGPlus_JCStatStalls;
+var float IGPlus_JCStatQueuedTime;
+var float IGPlus_JCStatDelayMax;
+var float IGPlus_JCStatOverCap;
 var IGPlus_WeaponImplementationBase IGPlus_WImpBase;
 	const IGPLUS_DetWEAPON_None = 0;
 	const IGPLUS_DetWEAPON_ShockRifle = 1;
@@ -700,6 +764,9 @@ var bool IGPlus_WeaponSettingsMenuCanEdit;
 struct IGPlus_WarpFix {
 	var vector OldLocation;
 	var int Counter;
+	// Jitter Compensation: the server holds this player still at OldLocation
+	// (the move queue ran empty). Other clients stop moving them along at once.
+	var bool bHold;
 };
 
 struct IGPlus_WarpFixClient {
@@ -913,6 +980,7 @@ replication
 		IGPlus_DetTranslocator,
 		IGPlus_PredictedDiscBoost,
 		IGPlus_PRTServerTick,
+		IGPlus_JCDelayMs,
 		KillCamDelay,
 		KillCamDuration,
 		LastKiller,
@@ -1270,6 +1338,7 @@ simulated event Destroyed() {
 		IGPlus_SKBall.Destroy();
 	if (Role == ROLE_Authority)
 		IGPlus_DetLogSummary();
+	IGPlus_JCDropQueue();
 	super.Destroyed();
 }
 
@@ -3577,8 +3646,10 @@ function IGPlus_PRTNote(int Data) {
 		IGPlus_PRTReason = "report ahead of our clock";
 	else if (IGPlus_PRTLagMs > WS.PingCompensationMax)
 		IGPlus_PRTReason = "above PingCompensationMax";
+	// (A queued move ran IGPlus_JCDelayMs after it arrived, Jitter
+	// Compensation: the report is that much older than our ping.)
 	else if (IGPlus_PRTServerPing > 0
-		&& Abs(IGPlus_PRTLagMs - IGPlus_PRTServerPing) > WS.PreciseRewindTimeMaxDeviationMs)
+		&& Abs(IGPlus_PRTLagMs - IGPlus_PRTServerPing - IGPlus_JCDelayMs) > WS.PreciseRewindTimeMaxDeviationMs)
 		IGPlus_PRTReason = "server ping"@int(IGPlus_PRTServerPing)@"ms";
 	IGPlus_PRTLagMs = FMax(0, IGPlus_PRTLagMs);
 }
@@ -3738,6 +3809,9 @@ function bool IGPlus_IsFlagCarrier() {
 function bool IGPlus_ShouldJitterBound() {
 	if (zzUTPure == none || zzUTPure.Settings == none)
 		return false;
+	// Jitter Compensation replaces jitter bounding.
+	if (zzUTPure.Settings.JitterCompensationActive())
+		return false;
 
 	switch (zzUTPure.Settings.JitterBoundingMode) {
 		case JB_All:         return true;
@@ -3807,7 +3881,8 @@ function ExtrapolationDiscardData() {
 
 function WarpCompensation(float DeltaTime) {
 	if (Level.Pauser == "" && !bWasPaused) {
-		if (zzUTPure.Settings.bEnableServerExtrapolation &&
+		// (Not a queued player, Jitter Compensation: they wait, no guessing.)
+		if (zzUTPure.Settings.bEnableServerExtrapolation && IGPlus_JCQueued == false &&
 			bExtrapolatedLastUpdate == false && ExtrapolationDelta > AverageServerDeltaTime
 		) {
 			bExtrapolatedLastUpdate = true;
@@ -3857,8 +3932,8 @@ simulated function float GetMoverFireZOffset(optional bool bFullPing) {
 
 	if (bFullPing)
 		Latency = PlayerReplicationInfo.Ping * 0.001 * Level.TimeDilation;
-	else
-		Latency = PlayerReplicationInfo.Ping * 0.0005 * Level.TimeDilation;
+	else // one way: plus the other half of the Jitter Compensation delay
+		Latency = (PlayerReplicationInfo.Ping + IGPlus_JCDelayMs) * 0.0005 * Level.TimeDilation;
 
 	if (zzUTPure != None) {
 		MD = zzUTPure.FindMoverDummy(Mover(Base));
@@ -4968,6 +5043,8 @@ function IGPlus_EventLog(string S) {
 function IGPlus_DetLogSummary() {
 	local float EyeAvg;
 
+	IGPlus_JCLogSummary();
+
 	if (IGPlus_bDetStatLogged || PlayerReplicationInfo == None)
 		return;
 	if (IGPlus_DetStatThrows + IGPlus_DetStatRejects + IGPlus_StatShotRefused + IGPlus_StatShotUnbound
@@ -5424,7 +5501,8 @@ function IGPlus_ApplyServerMove(IGPlus_ServerMove SM) {
 		if (Level.Pauser == "" && bWasPaused)
 			ServerDeltaTime = FMin(ServerDeltaTime, SM.MoveDeltaTime);
 	}
-	if (Level.Pauser == "" && !bWasPaused)
+	// (A queued move was measured when it arrived, IGPlus_JCIntercept.)
+	if (Level.Pauser == "" && !bWasPaused && IGPlus_JCPlaying == false)
 		IGPlus_DetUpdateFireClockLead(SM.TimeStamp, ServerDeltaTime);
 
 	if (zzUTPure.Settings.bEnableWarpFix && ServerDeltaTime > zzUTPure.Settings.WarpFixDelay) {
@@ -5986,6 +6064,516 @@ function bool IGPlus_OldServerMove(float TimeStamp, int OldMoveData1, int OldMov
 	return true;
 }
 
+// =============================================================================
+// Jitter Compensation (bEnableJitterCompensation, IGPlus_JC...)
+//
+// A move runs the moment its packet arrives. Packets that come late and
+// together make the player stand still on the server and then cover all that
+// time in one tick. With Jitter Compensation the moves of such a player wait
+// in a queue and run on a clock of their own: the player's time (the move
+// timestamps), advancing with server time. A player whose packets arrive on
+// time is not queued and runs through the code as before.
+//
+// Arrival (xxServerMove in any state): IGPlus_JCIntercept measures how late
+// the move is and keeps it for a queued player.
+// Playout (CheckClientError: the engine calls it right after it took in this
+// tick's packets, which is where arriving moves run too): IGPlus_JCPlayout
+// advances the clock and runs the moves it has reached, through xxServerMove
+// of the state the player is in by then.
+//
+// The delay (IGPlus_JCDelay) is how far the clock is behind the client's own
+// clock. It grows when the next move is late: the clock stands still and the
+// player with it (no guessed input, so no corrections). It shrinks with the
+// clock running up to 5% fast, down to the player's usual lateness. Above
+// JitterCompensationMax the moves run at once, as without the queue.
+// All times are game time (real seconds * Level.TimeDilation).
+// =============================================================================
+
+function bool IGPlus_JCActive() {
+	return zzUTPure != none && zzUTPure.Settings != none && bIs469Server
+		&& zzUTPure.Settings.JitterCompensationActive() && zzUTPure.Settings.JitterCompensationMax > 0;
+}
+
+// The timestamp a move in this tick's packets carries when nothing held it
+// up. The engine advances Level.TimeSeconds after it takes in the packets, so
+// they arrive one tick later than it says there.
+function float IGPlus_JCBase() {
+	return Level.TimeSeconds + IGPlus_JCTickLen - IGPlus_JCWinMin;
+}
+
+function float IGPlus_JCMaxDelay() {
+	return zzUTPure.Settings.JitterCompensationMax * 0.001 * Level.TimeDilation;
+}
+
+function IGPlus_JCSetDelayMs() {
+	if (IGPlus_JCQueued)
+		IGPlus_JCDelayMs = int(1000.0 * FMax(0.0, IGPlus_JCDelay) / Level.TimeDilation + 0.5);
+	else
+		IGPlus_JCDelayMs = 0;
+}
+
+// A number with one decimal, for the log lines.
+static function string IGPlus_JCFmt(float F) {
+	local int T;
+
+	T = int(F * 10.0 + 0.5);
+	return (T / 10)$"."$(T - (T / 10) * 10);
+}
+
+// One [JITTER] line when a player enters or leaves the queue, at most one a
+// second for each player.
+function IGPlus_JCLog(string What) {
+	if (PlayerReplicationInfo == none)
+		return;
+	if (IGPlus_JCLogTS > 0.0 && Level.TimeSeconds - IGPlus_JCLogTS < Level.TimeDilation)
+		return;
+	IGPlus_JCLogTS = Level.TimeSeconds;
+	IGPlus_EventLog("[JITTER]"@PlayerReplicationInfo.PlayerName@What
+		@"delayMs="$IGPlus_JCDelayMs
+		@"usualLateMs="$int(1000.0 * IGPlus_JCPeak / Level.TimeDilation)
+		@"tickMs="$IGPlus_JCFmt(1000.0 * IGPlus_JCTickLen / Level.TimeDilation)
+		@"ping="$PlayerReplicationInfo.Ping);
+}
+
+// Server: this map's numbers for one arriving move. Late: how far behind the
+// client's clock it arrived. Gap: server time since the move before it.
+function IGPlus_JCNoteArrival(float Late, float Gap, float MoveLen, float Tick) {
+	local float Ms, Ticks;
+
+	Ms = 1000.0 * Late / Level.TimeDilation;
+	Ticks = Late / Tick;
+	IGPlus_JCStatMoves++;
+	IGPlus_JCStatLateSum += Ms;
+	IGPlus_JCStatLateMax = FMax(IGPlus_JCStatLateMax, Ms);
+	IGPlus_JCStatTickSum += Ticks;
+	IGPlus_JCStatTickMax = FMax(IGPlus_JCStatTickMax, Ticks);
+	if (Ticks < 1.0)
+		IGPlus_JCStatUnder1++;
+	if (Ticks < 2.0)
+		IGPlus_JCStatUnder2++;
+	if (Ms > 50.0)
+		IGPlus_JCStatOver50++;
+	Ms = 1000.0 * Gap / Level.TimeDilation;
+	IGPlus_JCStatGapMax = FMax(IGPlus_JCStatGapMax, Ms);
+	if (Ms > 50.0)
+		IGPlus_JCStatGap50++;
+	if (Ms > 100.0)
+		IGPlus_JCStatGap100++;
+	if (1000.0 * MoveLen / Level.TimeDilation > 50.0)
+		IGPlus_JCStatLongMoves++;
+}
+
+// Server: one [JITTER-SUMMARY] line with how this player's moves arrived on
+// this map, written with the [DET-SUMMARY] line (IGPlus_DetLogSummary) and
+// whatever the Jitter Compensation setting. Lateness is how far behind the
+// client's clock a move arrived (the lowest arrival offset of the last 3 to 4
+// seconds), in real ms and in server ticks. A gap is the server time between
+// two arrivals. lostMoves are the holes lost moves left (the [DET-SUMMARY]
+// count). longMoves are moves over 50 ms (a hitch on the client). The last
+// fields are the queue's: moves that waited in it, time spent queued, times
+// entered, times the clock stood still, the highest delay, and the time above
+// JitterCompensationMax that ran at once.
+function IGPlus_JCLogSummary() {
+	local float N;
+
+	if (IGPlus_JCStatLogged || PlayerReplicationInfo == none || IGPlus_JCStatMoves == 0)
+		return;
+	IGPlus_JCStatLogged = true;
+	N = float(IGPlus_JCStatMoves);
+	IGPlus_EventLog("[JITTER-SUMMARY]"@PlayerReplicationInfo.PlayerName
+		@"moves="$IGPlus_JCStatMoves
+		@"lateMsAvg="$IGPlus_JCFmt(IGPlus_JCStatLateSum / N)@"lateMsMax="$int(IGPlus_JCStatLateMax)
+		@"lateTicksAvg="$IGPlus_JCFmt(IGPlus_JCStatTickSum / N)@"lateTicksMax="$IGPlus_JCFmt(IGPlus_JCStatTickMax)
+		@"under1Tick="$IGPlus_JCFmt(100.0 * IGPlus_JCStatUnder1 / N)$"%"
+		@"under2Ticks="$IGPlus_JCFmt(100.0 * IGPlus_JCStatUnder2 / N)$"%"
+		@"over50ms="$IGPlus_JCFmt(100.0 * IGPlus_JCStatOver50 / N)$"%"
+		@"gapMsMax="$int(IGPlus_JCStatGapMax)@"gaps50="$IGPlus_JCStatGap50@"gaps100="$IGPlus_JCStatGap100
+		@"lostMoves="$IGPlus_DetLostMoves@"longMoves="$IGPlus_JCStatLongMoves
+		@"tickMs="$IGPlus_JCFmt(1000.0 * IGPlus_JCTickLen / Level.TimeDilation)
+		@"queuedMoves="$IGPlus_JCStatQueuedMoves
+		@"queuedSec="$IGPlus_JCFmt(IGPlus_JCStatQueuedTime / Level.TimeDilation)
+		@"queueEntries="$IGPlus_JCStatEnters@"stalls="$IGPlus_JCStatStalls
+		@"delayMsMax="$int(IGPlus_JCStatDelayMax)
+		@"overCapMs="$int(1000.0 * IGPlus_JCStatOverCap / Level.TimeDilation)
+		@"ping="$PlayerReplicationInfo.Ping);
+}
+
+// Server: this player stands still from here on. The other clients stop
+// moving them along (bHold in IGPlus_WarpFixData, sent with this tick's
+// position) until a move runs again (IGPlus_JCRunHead).
+function IGPlus_JCHold() {
+	if (IGPlus_JCHeld)
+		return;
+	IGPlus_JCHeld = true;
+	IGPlus_JCStatStalls++;
+}
+
+// Server: a move just arrived (called first thing by xxServerMove in every
+// state). Measures its lateness. Sets IGPlus_JCKept when the player is queued
+// and the move waits: the caller then does nothing more with it. (A variable
+// and not a return value: 16 parameters is all a function can have.)
+function IGPlus_JCIntercept(
+	float TimeStamp,
+	int MoveDeltaTime,
+	vector Accel,
+	float ClientLocX,
+	float ClientLocY,
+	float ClientLocZ,
+	vector ClientVel,
+	int MiscData,
+	int MiscData2,
+	int View,
+	Actor ClientBase,
+	int OldMoveData1,
+	int OldMoveData2,
+	float DetRedoTS,
+	int DetRedoData,
+	int PRTData
+) {
+	local float MoveLen, Gap, Late, Tick;
+	local IGPlus_ServerMove SM, Prev;
+
+	IGPlus_JCKept = false;
+	// A queued move being run, or a move a state's xxServerMove showed us
+	// already and now passes on to the global one.
+	if (IGPlus_JCPlaying)
+		return;
+	if (IGPlus_JCSeen) {
+		IGPlus_JCSeen = false;
+		return;
+	}
+	if (Role < ROLE_Authority || bDeleteMe)
+		return;
+
+	MoveLen = IGPlus_UnpackDelta(MoveDeltaTime); // the top byte is a shot's eye height
+	Gap = Level.TimeSeconds - IGPlus_JCLastArrival;
+	// Paused, the first move, a long silence, or a client clock that went
+	// back: nothing to measure against. Start over, this move runs now.
+	if (Level.Pauser != "" || bWasPaused || IGPlus_JCHaveMin == false || Gap > 2.0
+		|| TimeStamp < IGPlus_JCLastArrivalTS - 0.5) {
+		if (IGPlus_JCQueued)
+			IGPlus_JCLeave("reset");
+		IGPlus_JCHaveMin = false;
+		IGPlus_JCMeasureStart = Level.TimeSeconds;
+		IGPlus_JCPeak = 0.0;
+		IGPlus_JCTickMaxTS = TimeStamp;
+		IGPlus_JCLastArrival = Level.TimeSeconds;
+		IGPlus_JCLastArrivalTS = TimeStamp;
+		IGPlus_JCNewestTS = TimeStamp;
+		return;
+	}
+
+	IGPlus_JCTickMaxTS = FMax(IGPlus_JCTickMaxTS, TimeStamp);
+	IGPlus_JCLastArrival = Level.TimeSeconds;
+	IGPlus_JCLastArrivalTS = FMax(IGPlus_JCLastArrivalTS, TimeStamp);
+	IGPlus_JCNewestTS = FMax(IGPlus_JCNewestTS, TimeStamp);
+	if (IGPlus_JCMoveLen <= 0.0)
+		IGPlus_JCMoveLen = FMin(MoveLen, 0.1);
+	else
+		IGPlus_JCMoveLen += (FMin(MoveLen, 0.1) - IGPlus_JCMoveLen) * 0.05;
+	// A new measure counts once its window is full: a join or a freeze
+	// leaves stray arrival times behind, which read as lateness.
+	if (Level.TimeSeconds - IGPlus_JCMeasureStart < IGPLUS_JC_WARMUP)
+		return;
+
+	Tick = FMax(IGPlus_JCTickLen, 0.001);
+	Late = FMax(0.0, IGPlus_JCBase() - TimeStamp);
+	IGPlus_JCNoteArrival(Late, Gap, MoveLen, Tick);
+	IGPlus_JCPeak = FMax(IGPlus_JCPeak, FMin(Late, 0.25));
+
+	if (IGPlus_JCActive() == false) {
+		if (IGPlus_JCQueued)
+			IGPlus_JCLeave("off");
+		return;
+	}
+	if (IGPlus_JCQueued == false) {
+		// On time: this move runs now, through the code as before.
+		if (ServerTimeStamp <= 0.0
+			|| Late <= IGPLUS_JC_ENTER_FRAMES * IGPlus_JCMoveLen + IGPLUS_JC_ENTER_TICKS * Tick)
+			return;
+		// Late: from here this player's moves are queued. The delay is how
+		// late this move came. After a stall the player stood still that
+		// long already, and the clock starts at this move: it runs this
+		// tick and the ones behind it at their own pace. A late move that
+		// newer ones overtook is lost as before, and the player stands
+		// still once, for the delay, so that the next one like it is not.
+		IGPlus_JCQueued = true;
+		IGPlus_JCHeld = false;
+		IGPlus_JCDelay = FMin(Late, IGPlus_JCMaxDelay());
+		// (Overtaken: the clock starts that far behind the moves that ran
+		// already, so nothing runs for about the delay. Held from now.)
+		if (TimeStamp <= CurrentTimeStamp)
+			IGPlus_JCHold();
+		IGPlus_JCClockTime = Level.TimeSeconds;
+		IGPlus_JCLastRun = ServerTimeStamp;
+		IGPlus_JCOverNow = 0.0;
+		IGPlus_JCEnterTime = Level.TimeSeconds;
+		IGPlus_JCStatEnters++;
+		IGPlus_JCSetDelayMs();
+		IGPlus_JCLog("queued lateMs="$int(1000.0 * Late / Level.TimeDilation)
+			@"slackMs="$int(1000.0 * (IGPLUS_JC_ENTER_FRAMES * IGPlus_JCMoveLen + IGPLUS_JC_ENTER_TICKS * Tick) / Level.TimeDilation));
+	} else if (TimeStamp <= CurrentTimeStamp && Late > IGPlus_JCDelay) {
+		// Too late even for the queue: newer moves ran over its time. The
+		// delay grows to this lateness, so the next move this late is in
+		// time. The player stands still for the difference, as in a stall,
+		// and is held from now when that is longer than moves are apart.
+		if (FMin(Late, IGPlus_JCMaxDelay()) - IGPlus_JCDelay > IGPLUS_JC_GRACE * IGPlus_JCMoveLen)
+			IGPlus_JCHold();
+		IGPlus_JCDelay = FMin(Late, IGPlus_JCMaxDelay());
+	}
+	// Already run or passed (out of order, twice): rejected as before.
+	if (TimeStamp <= CurrentTimeStamp)
+		return;
+
+	// The fire clock check measures at arrival (not when the move runs).
+	IGPlus_DetUpdateFireClockLead(TimeStamp, Gap);
+
+	if (IGPlus_JCCount >= IGPLUS_JC_MAXQUEUE)
+		IGPlus_JCRunHead();
+
+	SM = IGPlus_CreateServerMove();
+	SM.TimeStamp = TimeStamp;
+	SM.RawDelta = MoveDeltaTime;
+	SM.MoveDeltaTime = MoveLen;
+	SM.ClientAcceleration = Accel;
+	SM.ClientLocation.X = ClientLocX;
+	SM.ClientLocation.Y = ClientLocY;
+	SM.ClientLocation.Z = ClientLocZ;
+	SM.ClientVelocity = ClientVel;
+	SM.MiscData = MiscData;
+	SM.MiscData2 = MiscData2;
+	SM.View = View;
+	SM.ClientBase = ClientBase;
+	SM.OldMoveData1 = OldMoveData1;
+	SM.OldMoveData2 = OldMoveData2;
+	SM.DetRedoTS = DetRedoTS;
+	SM.DetRedoData = DetRedoData;
+	SM.PRTData = PRTData;
+
+	// Oldest first: packets can arrive out of order.
+	if (IGPlus_JCHead == none || TimeStamp < IGPlus_JCHead.TimeStamp) {
+		SM.Next = IGPlus_JCHead;
+		IGPlus_JCHead = SM;
+	} else {
+		// ponytail: walks the queue (a few dozen moves at most). A tail
+		// pointer if queues ever get long.
+		Prev = IGPlus_JCHead;
+		while (Prev.Next != none && Prev.Next.TimeStamp <= TimeStamp)
+			Prev = Prev.Next;
+		if (Prev.TimeStamp == TimeStamp) {
+			// The same move twice.
+			IGPlus_DestroyServerMove(SM);
+			IGPlus_JCKept = true;
+			return;
+		}
+		SM.Next = Prev.Next;
+		Prev.Next = SM;
+	}
+	IGPlus_JCCount++;
+	IGPlus_JCStatQueuedMoves++;
+	IGPlus_JCKept = true;
+}
+
+// Server: run the oldest queued move, as if it arrived now.
+function IGPlus_JCRunHead() {
+	local IGPlus_ServerMove SM;
+
+	SM = IGPlus_JCHead;
+	if (SM == none)
+		return;
+	IGPlus_JCHead = SM.Next;
+	SM.Next = none;
+	IGPlus_JCCount--;
+	IGPlus_JCHeld = false;
+	IGPlus_JCLastRun = Level.TimeSeconds;
+	IGPlus_JCPlaying = true;
+	xxServerMove(
+		SM.TimeStamp,
+		SM.RawDelta,
+		SM.ClientAcceleration,
+		SM.ClientLocation.X,
+		SM.ClientLocation.Y,
+		SM.ClientLocation.Z,
+		SM.ClientVelocity,
+		SM.MiscData,
+		SM.MiscData2,
+		SM.View,
+		SM.ClientBase,
+		SM.OldMoveData1,
+		SM.OldMoveData2,
+		SM.DetRedoTS,
+		SM.DetRedoData,
+		SM.PRTData);
+	IGPlus_JCPlaying = false;
+	IGPlus_DestroyServerMove(SM);
+}
+
+// Server: this player's moves run on arrival again. What is still queued
+// runs now.
+function IGPlus_JCLeave(string Why) {
+	while (IGPlus_JCHead != none && bDeleteMe == false)
+		IGPlus_JCRunHead();
+	IGPlus_JCQueued = false;
+	IGPlus_JCHeld = false;
+	IGPlus_JCDelay = 0.0;
+	IGPlus_JCSetDelayMs();
+	IGPlus_JCLog("unqueued reason="$Why@"queuedSec="$IGPlus_JCFmt((Level.TimeSeconds - IGPlus_JCEnterTime) / Level.TimeDilation));
+}
+
+function IGPlus_JCDropQueue() {
+	local IGPlus_ServerMove SM;
+
+	while (IGPlus_JCHead != none) {
+		SM = IGPlus_JCHead;
+		IGPlus_JCHead = SM.Next;
+		SM.Destroy();
+	}
+	IGPlus_JCCount = 0;
+}
+
+// Server, once a tick for a queued player, after this tick's moves arrived
+// (CheckClientError): advance the playout clock and run the moves it reached.
+function IGPlus_JCPlayout() {
+	local float dt, MaxDelay, Target, Clock, Limit;
+	local bool bStopped;
+
+	if (IGPlus_JCQueued == false)
+		return;
+	if (IGPlus_JCActive() == false || Level.Pauser != "") {
+		IGPlus_JCLeave("off");
+		return;
+	}
+	// Nothing for 2 seconds: the arrival measure starts over with the next
+	// move anyway (IGPlus_JCIntercept).
+	if (Level.TimeSeconds - IGPlus_JCLastArrival > 2.0) {
+		// (Nothing ran at once after all: not time above the cap.)
+		IGPlus_JCStatOverCap = FMax(0.0, IGPlus_JCStatOverCap - IGPlus_JCOverNow);
+		IGPlus_JCLeave("silent");
+		return;
+	}
+	dt = FMax(0.0, Level.TimeSeconds - IGPlus_JCClockTime);
+	IGPlus_JCClockTime = Level.TimeSeconds;
+	MaxDelay = IGPlus_JCMaxDelay();
+
+	// The delay to keep is the player's usual lateness. Lateness within the
+	// leave slack is a connection that arrives on time: no delay to keep.
+	Target = 0.0;
+	if (IGPlus_JCPeak > IGPLUS_JC_LEAVE_FRAMES * IGPlus_JCMoveLen + IGPLUS_JC_LEAVE_TICKS * IGPlus_JCTickLen)
+		Target = FMin(IGPlus_JCPeak, MaxDelay);
+
+	// More delay than that: the clock runs up to 5% fast. The delay is time
+	// the clock stood still before (or packets that began to arrive sooner,
+	// a ping drop), so this never runs more of the player's time than
+	// server time has passed. TimeMargin still checks every move as it runs.
+	if (IGPlus_JCDelay > Target)
+		IGPlus_JCDelay -= FMin(IGPLUS_JC_DRAIN * dt, IGPlus_JCDelay - Target);
+
+	// The next move is late: the clock stops and the player stands still.
+	// The time it stands is delay from here on, so play goes on from this
+	// spot at normal pace when moves arrive.
+	Clock = IGPlus_JCBase() - IGPlus_JCDelay;
+	Limit = IGPlus_JCNewestTS + IGPLUS_JC_GRACE * IGPlus_JCMoveLen;
+	if (Clock > Limit) {
+		IGPlus_JCDelay += Clock - Limit;
+		bStopped = true;
+	}
+	// Time above the cap runs at once, as without the queue. (Counted once
+	// for a stall: the delay is cut back to the cap every tick of it.)
+	if (IGPlus_JCDelay > MaxDelay) {
+		IGPlus_JCStatOverCap += FMax(0.0, IGPlus_JCDelay - MaxDelay - IGPlus_JCOverNow);
+		IGPlus_JCOverNow = FMax(IGPlus_JCOverNow, IGPlus_JCDelay - MaxDelay);
+		IGPlus_JCDelay = MaxDelay;
+	} else {
+		IGPlus_JCOverNow = 0.0;
+	}
+	IGPlus_JCSetDelayMs();
+	IGPlus_JCStatDelayMax = FMax(IGPlus_JCStatDelayMax, float(IGPlus_JCDelayMs));
+
+	Clock = IGPlus_JCBase() - IGPlus_JCDelay;
+	while (IGPlus_JCHead != none && IGPlus_JCHead.TimeStamp <= Clock && bDeleteMe == false)
+		IGPlus_JCRunHead();
+
+	// The player stands still on the server from here: the other clients
+	// hold them too, until a move runs. The queue lets us see it coming.
+	// When it has just run out and no move arrived for longer than moves
+	// are apart, the stall has outlasted the delay. Held in this same tick,
+	// so the hold reaches the others with the last real position and they
+	// never move the player past it. If the next move comes a moment later
+	// after all, they showed a stop of one tick.
+	if (IGPlus_JCHead == none
+		&& (bStopped || Level.TimeSeconds - IGPlus_JCLastArrival > IGPLUS_JC_GRACE * IGPlus_JCMoveLen))
+		IGPlus_JCHold();
+	// Whatever else kept moves from running for longer than they are apart.
+	else if (Level.TimeSeconds - IGPlus_JCLastRun > IGPLUS_JC_GRACE * IGPlus_JCMoveLen + IGPlus_JCTickLen)
+		IGPlus_JCHold();
+
+	// On time again and the delay made up: back to running on arrival.
+	if (Target <= 0.0 && IGPlus_JCHeld == false
+		&& IGPlus_JCDelay <= IGPLUS_JC_LEAVE_DELAY_TICKS * IGPlus_JCTickLen)
+		IGPlus_JCLeave("on-time");
+}
+
+// The engine (469) calls this for every connection right after it took in
+// this tick's packets. Stock uses it for its own ServerMove, which we replace.
+event CheckClientError() {
+	IGPlus_JCPlayout();
+}
+
+// Server, every tick (ServerTick), for every player.
+function IGPlus_JCTick(float DeltaTime) {
+	local float Off, Old;
+
+	if (IGPlus_JCTickLen <= 0.0)
+		IGPlus_JCTickLen = DeltaTime;
+	else
+		IGPlus_JCTickLen += (DeltaTime - IGPlus_JCTickLen) * 0.02;
+
+	// The client's clock seen from here: the lowest (arrival - timestamp) of
+	// the last 3 to 4 seconds. Taken here, where Level.TimeSeconds is the
+	// time this tick's packets were taken in.
+	if (IGPlus_JCTickMaxTS > 0.0) {
+		Off = Level.TimeSeconds - IGPlus_JCTickMaxTS;
+		IGPlus_JCTickMaxTS = 0.0;
+		Old = IGPlus_JCWinMin;
+		if (IGPlus_JCHaveMin == false) {
+			IGPlus_JCMinCur = Off;
+			IGPlus_JCMinPrev[0] = Off;
+			IGPlus_JCMinPrev[1] = Off;
+			IGPlus_JCMinPrev[2] = Off;
+			IGPlus_JCMinBucketEnd = Level.TimeSeconds + 1.0;
+			IGPlus_JCHaveMin = true;
+			Old = Off;
+		} else if (Level.TimeSeconds >= IGPlus_JCMinBucketEnd) {
+			IGPlus_JCMinPrev[2] = IGPlus_JCMinPrev[1];
+			IGPlus_JCMinPrev[1] = IGPlus_JCMinPrev[0];
+			IGPlus_JCMinPrev[0] = IGPlus_JCMinCur;
+			IGPlus_JCMinCur = Off;
+			IGPlus_JCMinBucketEnd = Level.TimeSeconds + 1.0;
+		} else {
+			IGPlus_JCMinCur = FMin(IGPlus_JCMinCur, Off);
+		}
+		IGPlus_JCWinMin = FMin(FMin(IGPlus_JCMinCur, IGPlus_JCMinPrev[0]), FMin(IGPlus_JCMinPrev[1], IGPlus_JCMinPrev[2]));
+		// The measure moved, the playout clock did not.
+		if (IGPlus_JCQueued)
+			IGPlus_JCDelay = FMax(0.0, IGPlus_JCDelay + Old - IGPlus_JCWinMin);
+	}
+
+	// The usual lateness forgets.
+	IGPlus_JCPeak -= IGPlus_JCPeak * FMin(1.0, DeltaTime / (IGPLUS_JC_PEAK_TIME * Level.TimeDilation));
+
+	if (IGPlus_JCQueued)
+		IGPlus_JCStatQueuedTime += DeltaTime;
+	IGPlus_JCSetDelayMs();
+
+	// The other clients hold us still while our clock stands still
+	// (IGPlus_ApplyWarpFix), and let go when a move ran.
+	if (IGPlus_WarpFixData.bHold != IGPlus_JCHeld) {
+		IGPlus_WarpFixData.bHold = IGPlus_JCHeld;
+		IGPlus_WarpFixData.OldLocation = Location;
+		IGPlus_WarpFixData.Counter += 1;
+	}
+}
+
 function IGPlus_ServerMove IGPlus_CreateServerMove() {
 	local IGPlus_ServerMove F;
 	if (IGPlus_ServerMove_FreeList != none) {
@@ -6056,6 +6644,12 @@ function xxServerMove(
 ) {
 	local IGPlus_ServerMove SM;
 
+	// Jitter Compensation: a queued player's move waits for its turn.
+	IGPlus_JCIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
+		MiscData, MiscData2, View, ClientBase, OldMoveData1, OldMoveData2, DetRedoTS, DetRedoData, PRTData);
+	if (IGPlus_JCKept)
+		return;
+
 	SM = IGPlus_CreateServerMove();
 
 	SM.TimeStamp = TimeStamp;
@@ -6104,6 +6698,12 @@ function xxServerMoveDead(
 	}
 
 	zzKickReady = Max(zzKickReady - 1,0);
+
+	// Jitter Compensation: our client knows it is dead. The moves it made
+	// before that run now, ahead of this one. Not a gap in the arrivals.
+	if (IGPlus_JCQueued)
+		IGPlus_JCLeave("dead");
+	IGPlus_JCLastArrival = Level.TimeSeconds;
 
 	if (TimeStamp > Level.TimeSeconds)
 		TimeStamp = Level.TimeSeconds;
@@ -6929,6 +7529,19 @@ function bool IGPlus_PointInsideCylinder(
 	return (DistXYSq <= Radius * Radius && Abs(P.Z - CylinderCenter.Z) <= HalfHeight);
 }
 
+// Client: how far ahead of the server's copy we draw our own projectile, in
+// game seconds: the way back from the server, half our ping. Our ping value
+// also holds our Jitter Compensation delay (the server acknowledges a move
+// when it runs it). That delay all lies on the way there, so it is taken out.
+static function float IGPlus_OwnProjLead(PlayerPawn P) {
+	local int Ms;
+
+	Ms = P.PlayerReplicationInfo.Ping;
+	if (bbPlayer(P) != none)
+		Ms = Max(0, Ms - bbPlayer(P).IGPlus_JCDelayMs);
+	return 0.0005 * P.Level.TimeDilation * Ms;
+}
+
 function float IGPlus_GetLatencyMs(optional bool bOneWay) {
 	local float PingMs;
 
@@ -6937,8 +7550,10 @@ function float IGPlus_GetLatencyMs(optional bool bOneWay) {
 	else if (PlayerReplicationInfo != None && PlayerReplicationInfo.Ping > 0)
 		PingMs = float(PlayerReplicationInfo.Ping);
 
+	// (One way: plus the other half of the Jitter Compensation delay, see
+	// IGPlus_WeaponImplementationBase.IGPlus_GetLatencyMs.)
 	if (bOneWay)
-		return FMax(0.0, 0.5 * PingMs);
+		return FMax(0.0, 0.5 * (PingMs + float(IGPlus_JCDelayMs)));
 	return FMax(0.0, PingMs);
 }
 
@@ -7889,7 +8504,9 @@ function float IGPlus_TradeTimeMargin() {
 			zzUTPure.Settings.MaxTradeTimeMargin,
 			((AverageServerDeltaTime + TimeBetweenNetUpdates)/Level.TimeDilation +
 			0.0005 * PlayerReplicationInfo.Ping * zzUTPure.Settings.TradePingMargin +
-			0.0005 * (PlayerReplicationInfo.Ping - bbPlayer(LastKiller).PlayerReplicationInfo.Ping))
+			// (one-way delays: each with the other half of its Jitter Compensation delay)
+			0.0005 * (PlayerReplicationInfo.Ping + IGPlus_JCDelayMs
+				- bbPlayer(LastKiller).PlayerReplicationInfo.Ping - bbPlayer(LastKiller).IGPlus_JCDelayMs))
 		);
 	return zzUTPure.Settings.MaxTradeTimeMargin;
 }
@@ -10941,6 +11558,7 @@ event ServerTick(float DeltaTime) {
 	local float SnapshotInterval;
 
 	AverageServerDeltaTime = (AverageServerDeltaTime*99 + DeltaTime) * 0.01;
+	IGPlus_JCTick(DeltaTime);
 	// Precise Rewind Time: stamp what this tick sends our client, and read
 	// our own measure of its ping to check its reports against.
 	if (RemoteRole == ROLE_AutonomousProxy && GetWeaponSettings() != none
@@ -11162,6 +11780,14 @@ state FeigningDeath
 		optional int PRTData
 	)
 	{
+		// Jitter Compensation: a queued player's move waits for its turn, and
+		// runs through the xxServerMove of the state we are in by then.
+		IGPlus_JCIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
+			MiscData, MiscData2, View, ClientBase, OldMoveData1, OldMoveData2, DetRedoTS, DetRedoData, PRTData);
+		if (IGPlus_JCKept)
+			return;
+		IGPlus_JCSeen = IGPlus_JCPlaying == false;
+
 		Global.xxServerMove(
 			TimeStamp,
 			MoveDeltaTime,
@@ -12312,6 +12938,14 @@ state Dying
 		local int KeepData, KeepData2, KeepDelta;
 		local bool bFireInput;
 
+		// Jitter Compensation: a queued player's move waits for its turn, and
+		// runs through the xxServerMove of the state we are in by then.
+		IGPlus_JCIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
+			MiscData, MiscData2, View, ClientBase, OldMoveData1, OldMoveData2, DetRedoTS, DetRedoData, PRTData);
+		if (IGPlus_JCKept)
+			return;
+		IGPlus_JCSeen = IGPlus_JCPlaying == false;
+
 		KeepData = MiscData & 0xFFFF;      // drop held fire
 		KeepData2 = MiscData2 & 0x3FFFFFFF; // drop force taps too, or Det weapons shoot from the grave
 		bFireInput = (MiscData & 0x03000000) != 0 || (MiscData2 & 0xC0000000) != 0;
@@ -12479,6 +13113,14 @@ ignores SeePlayer, HearNoise, KilledBy, Bump, HitWall, HeadZoneChange, FootZoneC
 		optional int PRTData
 	)
 	{
+		// Jitter Compensation: a queued player's move waits for its turn, and
+		// runs through the xxServerMove of the state we are in by then.
+		IGPlus_JCIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
+			MiscData, MiscData2, View, ClientBase, OldMoveData1, OldMoveData2, DetRedoTS, DetRedoData, PRTData);
+		if (IGPlus_JCKept)
+			return;
+		IGPlus_JCSeen = IGPlus_JCPlaying == false;
+
 		Global.xxServerMove(
 			TimeStamp,
 			MoveDeltaTime,
@@ -12986,11 +13628,19 @@ function IGPlus_ApplyWarpFix(PlayerReplicationInfo PRI) {
 	if (PRI.Owner.IsA('bbPlayer') == false)
 		return;
 
-	if (IGPlus_EnableWarpFix == false)
-		return;
-
 	P = bbPlayer(PRI.Owner);
 	if (IGPlus_ShouldUseSnapshotInterpForProxy(P))
+		return;
+
+	// Jitter Compensation: the server holds this player still, their next
+	// move is late. Stop moving them along now, not after IGPlus_WarpFixDelay.
+	// Never set for a player who is not queued.
+	if (P.IGPlus_WarpFixData.bHold && Level.Pauser == "") {
+		P.SetLocation(P.IGPlus_WarpFixData.OldLocation);
+		return;
+	}
+
+	if (IGPlus_EnableWarpFix == false)
 		return;
 
 	if (Level.Pauser != "") {
@@ -14839,7 +15489,7 @@ simulated function xxDrawDebugData(canvas zzC, float zzx, float zzY) {
 	zzC.SetPos(zzx, zzY + 60);
 	zzC.DrawText("ClientLoc:"@debugPlayerLocation);
 	zzC.SetPos(zzx, zzY + 80);
-	// empty line
+	zzC.DrawText("Jitter Compensation delay:"@IGPlus_JCDelayMs@"ms");
 	zzC.SetPos(zzx, zzY + 100);
 	zzC.DrawText("HitLocation:"@debugClientHitLocation);
 	zzC.SetPos(zzx, zzY + 120);
@@ -19590,6 +20240,8 @@ function IGPlus_ServerRequestSettings() {
 	IGPlus_ServerSendSetting("SnapshotInterpSendHz");
 	IGPlus_ServerSendSetting("SnapshotInterpRewindMs");
 	IGPlus_ServerSendSetting("bEnableWarpFix");
+	IGPlus_ServerSendSetting("bEnableJitterCompensation");
+	IGPlus_ServerSendSetting("JitterCompensationMax");
 
 	IGPlus_ServerSendSetting("MinClientRate");
 	IGPlus_ServerSendSetting("MaxClientRate");

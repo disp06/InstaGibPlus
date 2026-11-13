@@ -604,7 +604,7 @@ function AltFire( float Value )
         else if (STTarget != None && bbP != none && GetWeaponSettings().TranslocatorCompensatePing)
         {
             // Convert real ping time to game time by multiplying by TimeDilation
-            HistoricalLocation = STTarget.Location - (STTarget.Velocity * (float(bbP.PingAverage) * 0.5 * 0.001 * Level.TimeDilation));
+            HistoricalLocation = STTarget.Location - (STTarget.Velocity * (float(bbP.PingAverage + bbP.IGPlus_JCDelayMs) * 0.5 * 0.001 * Level.TimeDilation));
 
             STTarget.PreTranslocateLocation = STTarget.Location;
             STTarget.SetLocation(HistoricalLocation);
@@ -675,7 +675,7 @@ function Fire( float Value )
         else if (STTarget != None && bbP != none && GetWeaponSettings().TranslocatorCompensatePing)
         {
             // Convert real ping time to game time by multiplying by TimeDilation
-            HistoricalLocation = STTarget.Location - (STTarget.Velocity * (float(bbP.PingAverage) * 0.5 * 0.001 * Level.TimeDilation));
+            HistoricalLocation = STTarget.Location - (STTarget.Velocity * (float(bbP.PingAverage + bbP.IGPlus_JCDelayMs) * 0.5 * 0.001 * Level.TimeDilation));
 
             STTarget.PreTranslocateLocation = STTarget.Location;
             STTarget.SetLocation(HistoricalLocation);

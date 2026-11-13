@@ -1331,6 +1331,8 @@ function string IGPlus_NormalizeServerSettingKey(string Key) {
 	if (Key ~= "SnapshotInterpSendHz") return "SnapshotInterpSendHz";
 	if (Key ~= "SnapshotInterpRewindMs") return "SnapshotInterpRewindMs";
 	if (Key ~= "bEnableWarpFix") return "bEnableWarpFix";
+	if (Key ~= "bEnableJitterCompensation") return "bEnableJitterCompensation";
+	if (Key ~= "JitterCompensationMax") return "JitterCompensationMax";
 	if (Key ~= "MinClientRate") return "MinClientRate";
 	if (Key ~= "MaxClientRate") return "MaxClientRate";
 	if (Key ~= "ShowTouchedPackage") return "ShowTouchedPackage";

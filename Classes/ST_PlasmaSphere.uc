@@ -76,7 +76,7 @@ simulated function PostNetBeginPlay()
 					SetLocation(FakeLocation);
 				}
 
-				ExtrapolationDelta = (Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping));
+				ExtrapolationDelta = (Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer));
 			}
 		}
 	} else {
@@ -96,7 +96,7 @@ simulated event Tick(float Delta) {
 
     // Extrapolate locally to compensate for ping
     if (Physics != PHYS_None) {
-        NewXPolDelta = (Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping));
+        NewXPolDelta = (Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer));
         Move(NewXPolDelta - ExtrapolationDelta);
         ExtrapolationDelta = NewXPolDelta;
     }

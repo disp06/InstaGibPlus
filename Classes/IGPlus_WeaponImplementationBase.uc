@@ -63,8 +63,14 @@ function float IGPlus_GetLatencyMs(Pawn Instigator, optional bool bOneWay) {
 	if (PingMs <= 0.0 && Instigator.PlayerReplicationInfo != None && Instigator.PlayerReplicationInfo.Ping > 0)
 		PingMs = float(Instigator.PlayerReplicationInfo.Ping);
 
-	if (bOneWay)
+	// One way: half the ping holds half the Jitter Compensation delay (the
+	// client's ping runs to the acknowledgement, sent when the move runs).
+	// The whole delay lies on the way here, so add the other half.
+	if (bOneWay) {
+		if (bbP != None)
+			PingMs += float(bbP.IGPlus_JCDelayMs);
 		return FMax(0.0, 0.5 * PingMs);
+	}
 	return FMax(0.0, PingMs);
 }
 
@@ -99,10 +105,11 @@ function float IGPlus_GetAveragePingRewindMs(Pawn Instigator) {
 	InterpMs = IGPlus_GetSnapshotInterpRewindMs(Instigator);
 	BasePingMs = IGPlus_GetLatencyMs(Instigator, false);
 	if (InterpMs > 0.0) {
+		// (One way: plus the other half of the Jitter Compensation delay.)
 		if (bbP.PingAverage > 0)
-			EffectivePing = (0.5 * float(bbP.PingAverage)) + InterpMs;
+			EffectivePing = (0.5 * float(bbP.PingAverage + bbP.IGPlus_JCDelayMs)) + InterpMs;
 		else
-			EffectivePing = (0.5 * BasePingMs) + InterpMs;
+			EffectivePing = (0.5 * (BasePingMs + float(bbP.IGPlus_JCDelayMs))) + InterpMs;
 	} else
 		EffectivePing = BasePingMs;
 
@@ -1223,7 +1230,9 @@ function float SimulateProjectile(Projectile P, int Ping, optional float CatchUp
     SimPing = CatchUpMs;
   } else {
     InterpMs = IGPlus_GetSnapshotInterpRewindMs(P.Instigator);
-    SimPing = Ping * 0.5 + InterpMs;
+    // The shot's move ran one way plus the Jitter Compensation delay after it
+    // was made. Half the ping holds half that delay: add the other half.
+    SimPing = (Ping + bbPlayer(P.Instigator).IGPlus_JCDelayMs) * 0.5 + InterpMs;
   }
 
   // Cap ping compensation
@@ -1279,7 +1288,9 @@ function BatchSimulateProjectiles(Projectile Projectiles[6], int NumProjectiles,
   PureRef = bbPlayer(Projectiles[0].Instigator).zzUTPure;
 
   InterpMs = IGPlus_GetSnapshotInterpRewindMs(Projectiles[0].Instigator);
-  SimPing = Ping * 0.5 + InterpMs; // Simulate only 1-way latency
+  // Simulate only 1-way latency, with the other half of the Jitter
+  // Compensation delay (see SimulateProjectile).
+  SimPing = (Ping + bbPlayer(Projectiles[0].Instigator).IGPlus_JCDelayMs) * 0.5 + InterpMs;
   
   if (SimPing > WeaponSettings.PingCompensationMax)
     SimPing = WeaponSettings.PingCompensationMax;

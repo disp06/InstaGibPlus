@@ -229,6 +229,12 @@ var localized string SnapshotInterpRewindMsHelp;
 var UWindowCheckbox Chk_bEnableWarpFix;
 var localized string bEnableWarpFixText;
 var localized string bEnableWarpFixHelp;
+var UWindowCheckbox Chk_bEnableJitterCompensation;
+var localized string bEnableJitterCompensationText;
+var localized string bEnableJitterCompensationHelp;
+var IGPlus_EditControl Edit_JitterCompensationMax;
+var localized string JitterCompensationMaxText;
+var localized string JitterCompensationMaxHelp;
 
 var UWindowLabelControl Lbl_ClientEnforcement;
 var localized string ClientEnforcementText;
@@ -686,6 +692,8 @@ function SaveServerSettings() {
 	SaveServerSettingIfChanged(S, "SnapshotInterpRewindMs", Edit_SnapshotInterpRewindMs.GetValue());
 	SaveServerSettingIfChanged(S, "bEnableWarpFix", BoolToString(Chk_bEnableWarpFix.bChecked));
 	SaveServerSettingIfChanged(S, "WarpFixDelay", Edit_WarpFixDelay.GetValue());
+	SaveServerSettingIfChanged(S, "bEnableJitterCompensation", BoolToString(Chk_bEnableJitterCompensation.bChecked));
+	SaveServerSettingIfChanged(S, "JitterCompensationMax", Edit_JitterCompensationMax.GetValue());
 
 	SaveServerSettingIfChanged(S, "MinClientRate", Edit_MinClientRate.GetValue());
 	SaveServerSettingIfChanged(S, "MaxClientRate", Edit_MaxClientRate.GetValue());
@@ -1037,6 +1045,7 @@ function ConfigureResponsiveServerControls(Canvas C, float ControlWidth) {
 	ConfigureFixedWidthEdit(Edit_SnapshotInterpSendHz, C, ControlWidth, 80);
 	ConfigureFixedWidthEdit(Edit_SnapshotInterpRewindMs, C, ControlWidth, 80);
 	ConfigureFixedWidthEdit(Edit_WarpFixDelay, C, ControlWidth, 80);
+	ConfigureFixedWidthEdit(Edit_JitterCompensationMax, C, ControlWidth, 80);
 	ConfigureFixedWidthEdit(Edit_WarmupTimeLimit, C, ControlWidth, 80);
 	ConfigureFixedWidthEdit(Edit_Timeouts, C, ControlWidth, 80);
 	ConfigureFixedWidthEdit(Edit_MinClientRate, C, ControlWidth, 80);
@@ -1108,6 +1117,8 @@ function LoadServerSettings() {
 	Edit_SnapshotInterpSendHz.SetValue(string(S.SnapshotInterpSendHz));
 	Edit_SnapshotInterpRewindMs.SetValue(string(S.SnapshotInterpRewindMs));
 	Chk_bEnableWarpFix.bChecked = S.bEnableWarpFix;
+	Chk_bEnableJitterCompensation.bChecked = S.bEnableJitterCompensation;
+	Edit_JitterCompensationMax.SetValue(string(S.JitterCompensationMax));
 
 	Edit_MinClientRate.SetValue(string(S.MinClientRate));
 	Edit_MaxClientRate.SetValue(string(S.MaxClientRate));
@@ -1221,6 +1232,8 @@ function Created() {
 	Edit_SnapshotInterpRewindMs = CreateEdit(ECT_Real, SnapshotInterpRewindMsText, SnapshotInterpRewindMsHelp, 16, 80);
 	Chk_bEnableWarpFix = CreateCheckbox(bEnableWarpFixText, bEnableWarpFixHelp);
 	Edit_WarpFixDelay = CreateEdit(ECT_Real, WarpFixDelayText, WarpFixDelayHelp, 16, 80);
+	Chk_bEnableJitterCompensation = CreateCheckbox(bEnableJitterCompensationText, bEnableJitterCompensationHelp);
+	Edit_JitterCompensationMax = CreateEdit(ECT_Integer, JitterCompensationMaxText, JitterCompensationMaxHelp, 16, 80);
 
 	Lbl_ClientEnforcement = CreateSeparator(ClientEnforcementText);
 	Edit_MinClientRate = CreateEdit(ECT_Integer, MinClientRateText, MinClientRateHelp, 8, 80);
@@ -1367,6 +1380,8 @@ function BeforePaint(Canvas C, float X, float Y) {
 	LayoutControl(Edit_SnapshotInterpRewindMs, bShowSettings, WndWidth, Top);
 	LayoutControl(Chk_bEnableWarpFix, bShowSettings, WndWidth, Top);
 	LayoutControl(Edit_WarpFixDelay, bShowSettings, WndWidth, Top);
+	LayoutControl(Chk_bEnableJitterCompensation, bShowSettings, WndWidth, Top);
+	LayoutControl(Edit_JitterCompensationMax, bShowSettings, WndWidth, Top);
 
 	LayoutControl(Lbl_ClientEnforcement, bShowSettings, WndWidth, Top);
 	LayoutControl(Edit_MinClientRate, bShowSettings, WndWidth, Top);
@@ -1600,6 +1615,10 @@ defaultproperties
 	SnapshotInterpRewindMsHelp="Interpolation rewind delay in milliseconds"
 	bEnableWarpFixText="Enable Warp Fix"
 	bEnableWarpFixHelp="If checked, enables warp correction smoothing"
+	bEnableJitterCompensationText="Jitter Compensation"
+	bEnableJitterCompensationHelp="If checked, the server evens out the movement of a player whose packets arrive late or in clumps. Their moves wait in a short queue and play at the pace they were made, so other players see an even path instead of a stop and a jump. That player gets extra delay, up to Jitter Compensation Max, and no corrections from it. A player whose packets arrive on time is not queued and plays as before. Replaces jitter bounding, which does not run while this is on. Has no effect with input replication."
+	JitterCompensationMaxText="Jitter Compensation Max"
+	JitterCompensationMaxHelp="The most delay Jitter Compensation gives one player, in milliseconds. Movement that arrives later than this runs at once, as without Jitter Compensation."
 
 	ClientEnforcementText="Client Enforcement"
 	MinClientRateText="Min Client Rate"

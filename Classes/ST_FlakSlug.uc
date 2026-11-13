@@ -98,7 +98,7 @@ simulated function PostNetBeginPlay()
 					IGPlus_ClientGone();
 
 				// Pre-initialize ExtrapolationDelta so the first Tick doesn't cause a jump
-				ExtrapolationDelta = (Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping));
+				ExtrapolationDelta = (Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer));
 			}
 		}
 	} else if (IGPlus_HeldVelocity == vect(0,0,0)) {
@@ -117,7 +117,7 @@ simulated event Tick(float Delta) {
 		if (Physics != PHYS_None) {
 			Velocity = IGPlus_HeldVelocity;
 			if (InstigatingPlayer != None)
-				ExtrapolationDelta = Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping);
+				ExtrapolationDelta = Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer);
 		}
 		IGPlus_HeldVelocity = vect(0,0,0);
 		if (bCollideActors == false && bClientVisualOnly == false)
@@ -132,7 +132,7 @@ simulated event Tick(float Delta) {
 
     // Extrapolate locally to compensate for ping
 	if (Physics != PHYS_None) {
-		NewXPolDelta = (Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping));
+		NewXPolDelta = (Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer));
 		Move(NewXPolDelta - ExtrapolationDelta);
 		ExtrapolationDelta = NewXPolDelta;
 	}

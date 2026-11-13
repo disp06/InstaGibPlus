@@ -23,6 +23,9 @@ var int DetRedoData;
 var int PRTData;
 // The eye height the client traced this move's hitscan shot from (bbPlayer.IGPlus_EyePack). 0: none.
 var int ShotEye;
+// Jitter Compensation: a move waiting in the queue keeps the call as it came
+// (bbPlayer.IGPlus_JCIntercept). RawDelta is xxServerMove's MoveDeltaTime.
+var int RawDelta;
 var IGPlus_ServerMove Next;
 
 defaultproperties {
