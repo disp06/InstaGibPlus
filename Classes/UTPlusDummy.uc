@@ -6,11 +6,15 @@ var float EyeHeight;
 var float BaseEyeHeight;
 var float DuckFraction;
 var bool bHistoryCleared;
+var bool bLastHeld;
 
 var UTPlusSnapshot Data[48];
 var int DataIndex;
 
 var bool bCompActive;
+// The last rewind by the shown tick: how old the snapshot was at the time
+// the shooter saw, and for how long it was carried on (for the [DET-HIT] line).
+var float CompGap, CompCarry;
 
 var bool ActualWasColliding;
 var bool ActualWasBlockingActors;
@@ -70,6 +74,7 @@ function FillData(UTPlusSnapshot D) {
 	D.bSnapBlockPlayers = Actual.bBlockPlayers;
 	D.bSnapProjTarget = Actual.bProjTarget;
 	D.ServerTimeStamp = Level.TimeSeconds;
+	D.bHeld = bbPlayer(Actual) != None && bbPlayer(Actual).IGPlus_JCHeld;
 
 	D.AnimSequence = Actual.AnimSequence;
 	D.AnimFrame = Actual.AnimFrame;
@@ -83,6 +88,7 @@ function FillData(UTPlusSnapshot D) {
 event Tick(float DeltaTime) {
     local int i;
     local PlayerPawn PP;
+    local bool bNowHeld;
     super.Tick(DeltaTime);
 
     if (Actual == none || Actual.bDeleteMe) {
@@ -119,7 +125,11 @@ event Tick(float DeltaTime) {
 			bHistoryCleared = false;
 		}
 
-		if (PP.CurrentTimeStamp > LatestClientTimeStamp) {
+		// A snapshot for every tick a move ran in, and one for the tick Jitter
+		// Compensation starts to hold the player still (no move runs then).
+		bNowHeld = bbPlayer(PP) != None && bbPlayer(PP).IGPlus_JCHeld;
+		if (PP.CurrentTimeStamp > LatestClientTimeStamp || bNowHeld != bLastHeld) {
+			bLastHeld = bNowHeld;
 			LatestClientTimeStamp = PP.CurrentTimeStamp;
 			if (Data[DataIndex] == None)
 				Data[DataIndex] = new class'UTPlusSnapshot';
@@ -265,7 +275,15 @@ function CompSwap(UTPlusSnapshot SnapA, UTPlusSnapshot SnapB, float Alpha, float
 		return;
 
 	// Compute position/velocity based on compensation mode
-	if (Alpha == -1.0) {
+	if (SnapA.bHeld) {
+		// Held still by Jitter Compensation from this snapshot until the next
+		// one. The other clients drew the player standing here
+		// (bbPlayer.IGPlus_ApplyWarpFix), so nothing carries them on.
+		CompGap = TargetTimeStamp - SnapA.ServerTimeStamp;
+		CompCarry = 0;
+		TargetLoc = SnapA.Loc;
+		TargetVel = SnapA.Vel;
+	} else if (Alpha == -1.0) {
 		// Extrapolation from SnapA. Capped: a player whose packets stall has
 		// no newer snapshot, and an uncapped velocity carries them through walls.
 		// With warp fix on, clients hold a player stalled that long at this
@@ -274,6 +292,8 @@ function CompSwap(UTPlusSnapshot SnapA, UTPlusSnapshot SnapB, float Alpha, float
 		BP = bbPlayer(Actual);
 		if (BP != None && BP.IGPlus_EnableWarpFix && TargetTimeStamp - SnapA.ServerTimeStamp > BP.IGPlus_WarpFixDelay)
 			XpolTime = 0;
+		CompGap = TargetTimeStamp - SnapA.ServerTimeStamp;
+		CompCarry = XpolTime;
 		TargetLoc = SnapA.Loc + SnapA.Vel * XpolTime;
 		TargetVel = SnapA.Vel;
 	} else if (SnapB != None) {

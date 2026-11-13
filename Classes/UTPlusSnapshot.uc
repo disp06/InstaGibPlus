@@ -17,6 +17,9 @@ var bool bSnapBlockPlayers;
 var bool bSnapProjTarget;
 
 var float ServerTimeStamp;
+// Jitter Compensation held the player still from this snapshot on (their
+// move queue ran empty), and the other clients drew them standing there.
+var bool bHeld;
 var float ClientTimeStamp;
 
 var name  AnimSequence;

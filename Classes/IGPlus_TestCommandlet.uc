@@ -237,18 +237,12 @@ function TestPRTRulePos() {
 	LogTestResult(class'bbPlayer'.static.IGPlus_PRTRulePos(vect(7,8,9), vect(1000,0,0), 0.5, true) == vect(7,8,9),
 		"PRTRule_a_held_player_stays_at_the_update");
 	// Update and tick counter came in one frame, 4 ms before the shown frame.
-	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.004, 10.0, 500, 500, 0.004) - 0.004) < 0.00001,
-		"PRTRuleAge_together_is_the_reported_age");
-	// The counter is a tick ahead of the update we have: carried for its own time.
-	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.014, 10.0, 501, 500, 0.0) - 0.014) < 0.00001,
-		"PRTRuleAge_counter_a_tick_ahead_carries_the_update_on");
-	// Our update is newer than the shown tick: carried for its own, shorter time.
-	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.002, 10.0, 499, 500, 0.016) - 0.002) < 0.00001,
-		"PRTRuleAge_update_ahead_of_the_counter");
-	// No update for three ticks: the server has the player still at it.
-	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.040, 10.0, 503, 500, 0.003) - 0.003) < 0.00001,
-		"PRTRuleAge_a_stalled_player_gets_the_reported_age");
-	LogTestResult(class'bbPlayer'.static.IGPlus_PRTRuleAge(9.9, 10.0, 500, 500, 0.0) == 0.0,
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.004, 10.0) - 0.004) < 0.00001,
+		"PRTRuleAge_is_the_time_since_the_update");
+	// No update for 40 ms: the server carries its old snapshot for all of it.
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.040, 10.0) - 0.040) < 0.00001,
+		"PRTRuleAge_a_stalled_player_is_carried_for_the_whole_stall");
+	LogTestResult(class'bbPlayer'.static.IGPlus_PRTRuleAge(9.9, 10.0) == 0.0,
 		"PRTRuleAge_never_negative");
 	LogTestResult(class'bbPlayer'.static.IGPlus_Fmt1(12.34) == "12.3" && class'bbPlayer'.static.IGPlus_Fmt1(-0.26) == "-0.3"
 		&& class'bbPlayer'.static.IGPlus_Fmt1(-0.04) == "0.0" && class'bbPlayer'.static.IGPlus_Fmt1(7.96) == "8.0",

@@ -1276,7 +1276,7 @@ InstaGib with the deterministic SuperShockRifle. The server traces every shot it
 * There is no translocator, as in stock InstaGib and NewNetIG. The game's translocator setting does nothing here.
 * The rifle has no range limit.
 * A shot from a player who just died only counts with [bEnableTrades](#benabletrades) on in its weapon settings. It is off by default.
-* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime) on.
+* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime) on, and with [PingCompensationMax](#pingcompensationmax) at 250.
 
 ## InstaGibPlus_11.NewNetSA
 
@@ -1292,7 +1292,7 @@ SniperArena with the deterministic SniperRifle. The server traces every shot its
 * NextSA removes every weapon in the map. All other ammo becomes a bullet box, and a bullet box holds 50 bullets.
 * There is no translocator, as in stock Sniper Arena and NewNetSA. The game's translocator setting does nothing here.
 * A shot from a player who just died only counts with [bEnableTrades](#benabletrades) on in its weapon settings. It is off by default.
-* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime) on.
+* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime) on, and with [PingCompensationMax](#pingcompensationmax) at 250.
 
 ## InstaGibPlus_11.MutFraggerArena
 
@@ -1889,7 +1889,7 @@ A player whose packets arrive on time is not queued. The server runs their moves
 
 Jitter Compensation replaces jitter bounding. [JitterBoundingMode](#jitterboundingmode) does not run while this is on. Requires bEnableInputReplication to be False. Needs a server on version 469.
 
-The server log gets a `[JITTER]` line when a player enters or leaves the queue. It also gets a `[JITTER-SUMMARY]` line for each player at the end of a map. That line says how late the player's moves arrived. It is written with the setting on or off.
+The server log gets a `[JITTER]` line when a player enters or leaves the queue. It also gets a `[JITTER-SUMMARY]` line for each player at the end of a map. That line says how late the player's moves arrived, and how many of them were later than the slack that queues a player (`slackMs`, `overSlack`, and `overSlackEvents` for the times such a move came with none in the 3 seconds before it). It is written with the setting on or off.
 
 ## JitterCompensationMax
 
@@ -2112,7 +2112,7 @@ If enabled, hitscan shots are tested against where targets were on the shooter's
 ## PingCompensationMax
 
 **Type: int**  
-**Default: 200**  
+**Default: 200 (250 in NextIG and NextSA)**  
 **Unit: ms**  
 
 Upper bound on the rewind. Players above this ping are compensated as if they had this ping.
@@ -2278,6 +2278,7 @@ When a match ends or a player leaves, the server writes one `[DET-SUMMARY]` line
 | `switchMismatch` | Weapon switches the two sides resolved differently |
 | `clockHolds` | Seconds in which shots were held by [DetFireClockMargin](#detfireclockmargin) |
 | `hitShots` | NextIG and NextSA: shots that carried the result of the shooter's own trace |
+| `hitNoData` | NextIG and NextSA: shots the server ran with no result from the shooter's own trace. The shot's own move was lost, and the server fired on the next one |
 | `hitBoth` | Of those, shots that hit a player in both traces |
 | `hitClientOnly` | Shots that hit a player only in the shooter's own trace. The shooter got a hit sound and the server counted a miss |
 | `hitServerOnly` | Shots that hit a player only in the server's trace. The hit sound came a ping late |

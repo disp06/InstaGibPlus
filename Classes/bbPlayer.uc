@@ -166,6 +166,10 @@ var float IGPlus_PredSwitchLastLogTS;
 var float IGPlus_PSLastLogTS;         // server: IGPlus_PSLog's own throttle (a pipe bind's next command lands in the same tick)
 // Client: frame timestamp of the latest locally predicted Det shot.
 var float IGPlus_DetClientShotTS;
+// Server, sent to our client: the move time our last interval shot ran on
+// (IGPlus_DetNoteShot). Client: the last value it acted on.
+var float IGPlus_DetServerShotTS;
+var float IGPlus_DetServerShotSeen;
 var float IGPlus_DetLastShotTS;
 var float IGPlus_DetHolsterHoldUntilTS;
 var float IGPlus_DetPendingStuckSince;
@@ -371,6 +375,9 @@ var int IGPlus_PRTSeenTick;          // client: the newest tick we got
 var float IGPlus_PRTSeenAt;          // client: our time when it arrived
 var int IGPlus_PRTShownTick;         // client: the update our last frame showed
 var float IGPlus_PRTShownAge;        // client: how far past it that frame was
+var float IGPlus_PRTShotLead;        // client: added to it for this frame's shot (IGPlus_PRTShotTarget)
+var float IGPlus_PRTSeenLead;        // client: the length of the frame the newest update arrived in
+var float IGPlus_PRTShownLead;       // client: the same for the update the last frame showed
 var float IGPlus_PRTShownTime;       // client: that frame's time
 var float IGPlus_PRTNoteTS;          // server: when the last shot's report arrived
 var int IGPlus_PRTNoteTick;          // server: our tick count then
@@ -487,6 +494,7 @@ var int IGPlus_HitStatDeadShots, IGPlus_HitStatDeadHits;
 var int IGPlus_ClientHitVerdict;    // client: the last shot's, until its move takes it. Server: the running move's. 0: none
 var float IGPlus_ClientHitPlayedTS; // client: when our own trace last hit a player. 0: none waiting for the server's message
 var int IGPlus_HitStatShots, IGPlus_HitStatBoth, IGPlus_HitStatClientOnly, IGPlus_HitStatServerOnly, IGPlus_HitStatHeadDiff;
+var int IGPlus_HitStatNoData; // rifle and sniper shots the server ran with no data from the client's shot
 // The eye height a deterministic hitscan shot starts at (ST_SuperShockRifle,
 // ST_SniperRifle). Each side works out EyeHeight on its own: the server once
 // a tick and never with view shake, the client once a frame. A sniper hit
@@ -656,6 +664,10 @@ var int IGPlus_JCStatMoves;
 var int IGPlus_JCStatUnder1;
 var int IGPlus_JCStatUnder2;
 var int IGPlus_JCStatOver50;
+// Moves later than the slack that queues a player, the times such a move came
+// with none in the 3 seconds before it, and the slack itself added up.
+var int IGPlus_JCStatOverSlack, IGPlus_JCStatSlackEvents;
+var float IGPlus_JCStatSlackTS, IGPlus_JCStatSlackSum;
 var float IGPlus_JCStatLateSum;
 var float IGPlus_JCStatLateMax;
 var float IGPlus_JCStatTickSum;
@@ -825,13 +837,26 @@ var float IGPlus_LocationOffsetFix_PrevServerLocationTime;
 // The server tick our client knew when each of the two arrived (IGPlus_PRTServerTick).
 var int IGPlus_LocationOffsetFix_ServerLocationTick;
 var int IGPlus_LocationOffsetFix_PrevServerLocationTick;
+// How far the engine had moved the player on already when we noted each of
+// the two, as a time. The engine moves a simulated pawn by its velocity for
+// the frame's length before the pawn's Tick runs (AActor::Tick). An update
+// that brings a velocity is noted one frame's movement past the spot the
+// server sent. One without a velocity is not: the parked pawn has next to none.
+var float IGPlus_LocationOffsetFix_ServerLocationLead;
+var float IGPlus_LocationOffsetFix_PrevServerLocationLead;
 // Client, on another player's pawn: moved for our own trace (IGPlus_PRTRulePlace).
 var bool IGPlus_bPRTRulePlaced;
+// Client, on another player's pawn: where our last frame drew them, and which frame that was (PreRender).
+var vector IGPlus_ShownLoc;
+var int IGPlus_ShownFrame;
+// Client, on another player's pawn: the last frame drew them held still, and where (IGPlus_ApplyWarpFix).
+var bool IGPlus_bPRTRuleHeld;
+var vector IGPlus_PRTRuleHeldLoc;
 var vector IGPlus_PRTRuleSavedLoc;
 // What the last placement used, for the shooter's "Own trace" debug line.
 var bool IGPlus_bPRTRuleDbgValid, IGPlus_bPRTRuleDbgPrev;
 var vector IGPlus_PRTRuleDbgLoc, IGPlus_PRTRuleDbgVel;
-var float IGPlus_PRTRuleDbgAge;
+var float IGPlus_PRTRuleDbgAge, IGPlus_PRTRuleDbgLead;
 var int IGPlus_PRTRuleDbgLag;
 var bool IGPlus_LocationOffsetFix_DrawServerLocation;
 var Actor IGPlus_LocationOffsetFix_DrawDummy;
@@ -980,6 +1005,7 @@ replication
 		IGPlus_DetTranslocator,
 		IGPlus_PredictedDiscBoost,
 		IGPlus_PRTServerTick,
+		IGPlus_DetServerShotTS,
 		IGPlus_JCDelayMs,
 		KillCamDelay,
 		KillCamDuration,
@@ -3641,8 +3667,10 @@ function IGPlus_PRTNote(int Data) {
 		IGPlus_PRTReason = "snapshot interpolation";
 	else if (Back >= 64 || IGPlus_PRTSeenTime <= 0)
 		IGPlus_PRTReason = "update too old";
-	// On a LAN a frame can reach us before our next tick: a little ahead is fine.
-	else if (IGPlus_PRTLagMs < -20)
+	// On a LAN a frame can reach us before our next tick, and a shot's report
+	// is later by one client frame when the engine had moved its target on
+	// already (IGPlus_PRTShotTargetLead): up to 50 ms ahead is fine.
+	else if (IGPlus_PRTLagMs < -50)
 		IGPlus_PRTReason = "report ahead of our clock";
 	else if (IGPlus_PRTLagMs > WS.PingCompensationMax)
 		IGPlus_PRTReason = "above PingCompensationMax";
@@ -5048,7 +5076,7 @@ function IGPlus_DetLogSummary() {
 	if (IGPlus_bDetStatLogged || PlayerReplicationInfo == None)
 		return;
 	if (IGPlus_DetStatThrows + IGPlus_DetStatRejects + IGPlus_StatShotRefused + IGPlus_StatShotUnbound
-		+ IGPlus_StatSwitchMismatch + IGPlus_StatClockHolds + IGPlus_HitStatShots
+		+ IGPlus_StatSwitchMismatch + IGPlus_StatClockHolds + IGPlus_HitStatShots + IGPlus_HitStatNoData
 		+ IGPlus_HitStatEyeUsed + IGPlus_HitStatEyeRefused + IGPlus_HitStatDeadShots == 0)
 		return;
 	if (IGPlus_HitStatEyeUsed > 0)
@@ -5061,7 +5089,7 @@ function IGPlus_DetLogSummary() {
 		@"jumpDropped="$IGPlus_DetStatJumpDropped
 		@"shotRefused="$IGPlus_StatShotRefused@"shotUnbound="$IGPlus_StatShotUnbound
 		@"switchMismatch="$IGPlus_StatSwitchMismatch@"clockHolds="$IGPlus_StatClockHolds
-		@"hitShots="$IGPlus_HitStatShots@"hitBoth="$IGPlus_HitStatBoth
+		@"hitShots="$IGPlus_HitStatShots@"hitNoData="$IGPlus_HitStatNoData@"hitBoth="$IGPlus_HitStatBoth
 		@"hitClientOnly="$IGPlus_HitStatClientOnly@"hitServerOnly="$IGPlus_HitStatServerOnly
 		@"hitHeadDiff="$IGPlus_HitStatHeadDiff
 		@"hitDrawnDiff="$IGPlus_HitStatDrawnDiff@"hitDrawnRight="$IGPlus_HitStatDrawnRight
@@ -6138,7 +6166,7 @@ function IGPlus_JCLog(string What) {
 // Server: this map's numbers for one arriving move. Late: how far behind the
 // client's clock it arrived. Gap: server time since the move before it.
 function IGPlus_JCNoteArrival(float Late, float Gap, float MoveLen, float Tick) {
-	local float Ms, Ticks;
+	local float Ms, Ticks, Slack;
 
 	Ms = 1000.0 * Late / Level.TimeDilation;
 	Ticks = Late / Tick;
@@ -6153,6 +6181,16 @@ function IGPlus_JCNoteArrival(float Late, float Gap, float MoveLen, float Tick) 
 		IGPlus_JCStatUnder2++;
 	if (Ms > 50.0)
 		IGPlus_JCStatOver50++;
+	// Would this move have queued the player (IGPlus_JCIntercept)? Counted
+	// with the setting off too, to set the slack from real connections.
+	Slack = IGPLUS_JC_ENTER_FRAMES * IGPlus_JCMoveLen + IGPLUS_JC_ENTER_TICKS * Tick;
+	IGPlus_JCStatSlackSum += 1000.0 * Slack / Level.TimeDilation;
+	if (Late > Slack) {
+		IGPlus_JCStatOverSlack++;
+		if (IGPlus_JCStatSlackTS <= 0.0 || Level.TimeSeconds - IGPlus_JCStatSlackTS > 3.0 * Level.TimeDilation)
+			IGPlus_JCStatSlackEvents++;
+		IGPlus_JCStatSlackTS = Level.TimeSeconds;
+	}
 	Ms = 1000.0 * Gap / Level.TimeDilation;
 	IGPlus_JCStatGapMax = FMax(IGPlus_JCStatGapMax, Ms);
 	if (Ms > 50.0)
@@ -6187,6 +6225,7 @@ function IGPlus_JCLogSummary() {
 		@"under1Tick="$IGPlus_JCFmt(100.0 * IGPlus_JCStatUnder1 / N)$"%"
 		@"under2Ticks="$IGPlus_JCFmt(100.0 * IGPlus_JCStatUnder2 / N)$"%"
 		@"over50ms="$IGPlus_JCFmt(100.0 * IGPlus_JCStatOver50 / N)$"%"
+		@"slackMs="$IGPlus_JCFmt(IGPlus_JCStatSlackSum / N)@"overSlack="$IGPlus_JCStatOverSlack@"overSlackEvents="$IGPlus_JCStatSlackEvents
 		@"gapMsMax="$int(IGPlus_JCStatGapMax)@"gaps50="$IGPlus_JCStatGap50@"gaps100="$IGPlus_JCStatGap100
 		@"lostMoves="$IGPlus_DetLostMoves@"longMoves="$IGPlus_JCStatLongMoves
 		@"tickMs="$IGPlus_JCFmt(1000.0 * IGPlus_JCTickLen / Level.TimeDilation)
@@ -6990,30 +7029,28 @@ static function vector IGPlus_PRTRulePos(vector Loc, vector Vel, float Age, bool
 // of the update we have, or behind it. The player has moved on in that tick,
 // so the update is carried for its own time (first match test, Nov 13 2026:
 // carried for ShownAge, the trace was a tick's movement off on 15 of 1111
-// shots, where the drawn bodies were right). Two ticks or more with no update
-// while the counter went on means the server has the player still at that
-// update (stalled, or standing): then it is ShownAge.
-static function float IGPlus_PRTRuleAge(float ShownTime, float UpdateTime, int ShownTick, int UpdateTick, float ShownAge) {
-	local float Age;
-
-	Age = FMax(0.0, ShownTime - UpdateTime);
-	if (ShownTick - UpdateTick >= 2)
-		Age = FMin(Age, ShownAge);
-	return Age;
+// shots, where the drawn bodies were right). A player whose packets stall
+// gets no new snapshot on the server (UTPlusDummy takes one when a move
+// ran), so the server carries the old one for the whole stall, and so do we
+// (rig test, Nov 13 2026: carried for ShownAge only, the trace was up to 10
+// units off during stalls of 40 to 80 ms).
+static function float IGPlus_PRTRuleAge(float ShownTime, float UpdateTime) {
+	return FMax(0.0, ShownTime - UpdateTime);
 }
 
 // Client, on another player's pawn: stand it there for our own trace. Called
 // with the pawn where the last frame drew it (IGPlus_LocationOffsetFix_RestoreAll).
 // Not on a lift (the server lines riders up with the lift) and not before the
 // first update.
-simulated function IGPlus_PRTRulePlace(float ShownTime, int ShownTick, float ShownAge, bool bWarpFix, float WarpFixDelay) {
+simulated function IGPlus_PRTRulePlace(float ShownTime, int ShownTick, bool bWarpFix, float WarpFixDelay) {
 	local vector Loc, Vel;
-	local float UpdateTime, Age;
+	local float UpdateTime, Age, Lead;
 	local int UpdateTick;
 
 	IGPlus_bPRTRulePlaced = false;
 	IGPlus_bPRTRuleDbgValid = false;
 	IGPlus_bPRTRuleDbgPrev = false;
+	IGPlus_PRTRuleDbgLead = 0.0;
 	if (IGPlus_LocationOffsetFix_ServerLocationTime <= 0.0 || bHidden || Health <= 0
 		|| IGPlus_LocationOffsetFix_WasOnMover || IGPlus_LocationOffsetFix_IsOnMover())
 		return;
@@ -7021,25 +7058,60 @@ simulated function IGPlus_PRTRulePlace(float ShownTime, int ShownTick, float Sho
 	Vel = IGPlus_LocationOffsetFix_ServerVelocity;
 	UpdateTime = IGPlus_LocationOffsetFix_ServerLocationTime;
 	UpdateTick = IGPlus_LocationOffsetFix_ServerLocationTick;
+	Lead = IGPlus_LocationOffsetFix_ServerLocationLead;
+	// Held still by Jitter Compensation in the last frame: the server stands
+	// them at the spot that frame drew them at (UTPlusDummy.CompSwap). They
+	// are put there, since this frame's update may have moved them on already.
+	if (IGPlus_bPRTRuleHeld) {
+		Loc = IGPlus_PRTRuleHeldLoc;
+		Vel = vect(0,0,0);
+		UpdateTime = ShownTime;
+		UpdateTick = ShownTick;
+		Lead = 0.0;
 	// This frame's update is in already: the last frame showed the one before.
-	if (UpdateTime == Level.TimeSeconds) {
+	} else if (UpdateTime == Level.TimeSeconds) {
 		if (IGPlus_LocationOffsetFix_PrevServerLocationTime <= 0.0)
 			return;
 		Loc = IGPlus_LocationOffsetFix_PrevServerLocation;
 		Vel = IGPlus_LocationOffsetFix_PrevServerVelocity;
 		UpdateTime = IGPlus_LocationOffsetFix_PrevServerLocationTime;
 		UpdateTick = IGPlus_LocationOffsetFix_PrevServerLocationTick;
+		Lead = IGPlus_LocationOffsetFix_PrevServerLocationLead;
 		IGPlus_bPRTRuleDbgPrev = true;
 	}
-	Age = IGPlus_PRTRuleAge(ShownTime, UpdateTime, ShownTick, UpdateTick, ShownAge);
+	Age = IGPlus_PRTRuleAge(ShownTime, UpdateTime);
 	IGPlus_PRTRuleSavedLoc = Location;
 	IGPlus_PRTRuleDbgLoc = IGPlus_PRTRulePos(Loc, Vel, Age, bWarpFix && Age > WarpFixDelay);
 	IGPlus_PRTRuleDbgVel = Vel;
 	IGPlus_PRTRuleDbgAge = Age;
+	IGPlus_PRTRuleDbgLead = Lead;
 	IGPlus_PRTRuleDbgLag = ShownTick - UpdateTick;
 	IGPlus_bPRTRuleDbgValid = true;
 	bCollideWorld = false;
 	SetLocation(IGPlus_PRTRuleDbgLoc);
+	bCollideWorld = true;
+	IGPlus_bPRTRulePlaced = true;
+}
+
+// Client, on another player's pawn: stand it where our frame number Frame
+// drew it, for our own trace (Location Offset Fix off). A player held still
+// by Jitter Compensation was drawn at the held spot, so that is covered.
+simulated function IGPlus_PRTPicturePlace(int Frame, float Lead) {
+	IGPlus_bPRTRulePlaced = false;
+	IGPlus_bPRTRuleDbgValid = false;
+	IGPlus_bPRTRuleDbgPrev = false;
+	IGPlus_PRTRuleDbgLead = 0.0;
+	if (IGPlus_ShownFrame != Frame || bHidden || Health <= 0)
+		return;
+	IGPlus_PRTRuleSavedLoc = Location;
+	IGPlus_PRTRuleDbgLoc = IGPlus_ShownLoc;
+	IGPlus_PRTRuleDbgVel = Velocity;
+	IGPlus_PRTRuleDbgAge = 0.0;
+	IGPlus_PRTRuleDbgLead = Lead;
+	IGPlus_PRTRuleDbgLag = 0;
+	IGPlus_bPRTRuleDbgValid = true;
+	bCollideWorld = false;
+	SetLocation(IGPlus_ShownLoc);
 	bCollideWorld = true;
 	IGPlus_bPRTRulePlaced = true;
 }
@@ -7056,17 +7128,31 @@ simulated function IGPlus_PRTRuleUndo() {
 // Client: does the server place players by our Precise Rewind Time report
 // for the shot we are about to trace? The same conditions as the report
 // itself (xxReplicateMove, SendSavedMove).
-function bool IGPlus_PRTRuleUsable() {
+function bool IGPlus_PRTTraceUsable() {
 	local WeaponSettingsRepl WS;
 
 	WS = GetWeaponSettings();
 	return WS != None && WS.bEnablePingCompensation && WS.bEnablePreciseRewindTime
 		&& IGPlus_EnableSnapshotInterpolation == false && IGPlus_EnableInputReplication == false
-		&& Settings != None && Settings.bEnableLocationOffsetFix
-		&& IGPlus_PRTSeenAt > 0 && IGPlus_PRTShownTick != 0;
+		&& Settings != None && IGPlus_PRTSeenAt > 0 && IGPlus_PRTShownTick != 0;
+}
+// Our own trace stands the others where the server will (IGPlus_PRTRulePlace).
+// That needs the record of each player's updates, which Location Offset Fix keeps.
+function bool IGPlus_PRTRuleUsable() {
+	return IGPlus_PRTTraceUsable() && Settings.bEnableLocationOffsetFix;
+}
+// With Location Offset Fix off there is no such record: the engine blends
+// each update into the pawn's spot (AActor::PostNetReceive moves a simulated
+// pawn 15% of the way), so script never sees the spot the server sent. Our
+// own trace then tests the others where the last frame drew them
+// (IGPlus_PRTPicturePlace). The engine carries a player on every frame, also
+// in the frame an update arrives, so in steady movement that picture is the
+// server's spot once the shot counts that frame (IGPlus_PRTShownLead).
+function bool IGPlus_PRTPictureUsable() {
+	return IGPlus_PRTTraceUsable() && Settings.bEnableLocationOffsetFix == false;
 }
 
-function IGPlus_PRTRuleAll(bool bPlace) {
+function IGPlus_PRTRuleAll(bool bPlace, optional bool bPicture) {
 	local int i;
 	local PlayerReplicationInfo PRI;
 	local bbPlayer P;
@@ -7078,11 +7164,13 @@ function IGPlus_PRTRuleAll(bool bPlace) {
 		if (PRI == None) break;
 		P = bbPlayer(PRI.Owner);
 		if (P == None || P.Role != ROLE_SimulatedProxy) continue;
-		if (bPlace)
-			P.IGPlus_PRTRulePlace(IGPlus_PRTShownTime, IGPlus_PRTShownTick, IGPlus_PRTShownAge,
-				IGPlus_EnableWarpFix, IGPlus_WarpFixDelay);
-		else
+		if (bPlace == false)
 			P.IGPlus_PRTRuleUndo();
+		else if (bPicture)
+			P.IGPlus_PRTPicturePlace(IGPlus_FrameCount - 1, IGPlus_PRTShownLead);
+		else
+			P.IGPlus_PRTRulePlace(IGPlus_PRTShownTime, IGPlus_PRTShownTick,
+				IGPlus_EnableWarpFix, IGPlus_WarpFixDelay);
 	}
 }
 
@@ -7121,7 +7209,7 @@ static function float IGPlus_LineCylinderGap(vector Start, vector Dir, vector Lo
 // drawn body (smooth), and both spots. The server's [DET-HIT] line for the
 // same shot has its own spot (srvLoc), so the three can be laid side by side.
 // Called with the others where the last frame drew them.
-function IGPlus_ClientShotTraceDebug(Actor Other, Actor Drawn, bool bRule, vector StartTrace, vector EndTrace) {
+function IGPlus_ClientShotTraceDebug(Actor Other, Actor Drawn, bool bRule, vector StartTrace, vector EndTrace, optional bool bPicture) {
 	local int i;
 	local PlayerReplicationInfo PRI;
 	local bbPlayer P, Best;
@@ -7154,7 +7242,11 @@ function IGPlus_ClientShotTraceDebug(Actor Other, Actor Drawn, bool bRule, vecto
 		}
 	}
 
-	if (bRule)
+	// rule=picture: Location Offset Fix is off and the trace tested the
+	// others where the last frame drew them (ruleLoc is that spot).
+	if (bPicture)
+		S = "rule=picture hit="$(Pawn(Other) != None);
+	else if (bRule)
 		S = "rule="$(Pawn(Other) != None)@"drawn="$(Pawn(Drawn) != None);
 	else if (Settings != None && Settings.bEnableLocationOffsetFix == false)
 		S = "rule=off(LocationOffsetFix off) drawn="$(Pawn(Other) != None);
@@ -7168,7 +7260,7 @@ function IGPlus_ClientShotTraceDebug(Actor Other, Actor Drawn, bool bRule, vecto
 	if (bRule && Best.IGPlus_bPRTRuleDbgValid)
 		S = S@"ruleGap="$IGPlus_Fmt1(BestRuleGap)@"ruleLoc="$IGPlus_FmtVec1(Best.IGPlus_PRTRuleDbgLoc)
 			@"apart="$IGPlus_Fmt1(VSize(Best.IGPlus_PRTRuleDbgLoc - Best.Location))
-			@"updAge="$IGPlus_Fmt1(1000.0 * Best.IGPlus_PRTRuleDbgAge)@"tickLag="$Best.IGPlus_PRTRuleDbgLag
+			@"updAge="$IGPlus_Fmt1(1000.0 * Best.IGPlus_PRTRuleDbgAge)@"lead="$IGPlus_Fmt1(1000.0 * Best.IGPlus_PRTRuleDbgLead)@"tickLag="$Best.IGPlus_PRTRuleDbgLag
 			@"prev="$Best.IGPlus_bPRTRuleDbgPrev@"vel="$IGPlus_FmtVec1(Best.IGPlus_PRTRuleDbgVel)
 			@"velChange="$int(VSize(Best.IGPlus_LocationOffsetFix_ServerVelocity - Best.IGPlus_LocationOffsetFix_PrevServerVelocity))
 			@"smooth="$IGPlus_Fmt1(VSize(Best.IGPlus_LocationOffsetFix_PredictionOffset));
@@ -7201,23 +7293,61 @@ function Actor IGPlus_ClientShotTraceOnce(
 //
 // Where the two differ on whether a player was hit, IGPlus_bShotDrawnDiffers
 // says so and the server counts it (hitDrawnDiff).
+// Client, with the others standing where IGPlus_PRTRulePlace put them: the
+// lead of the player this shot is at (the one it hit, or else the one it
+// passed closest, within 100 units). The shot's move adds it to the age it
+// reports, so the server carries that player on by the frame the engine had
+// moved them already. The server carries every player by the one reported
+// age, so only the shot's own target is exact (rig test, Nov 13 2026: with
+// no lead the server stood a target who was changing speed one client frame
+// of movement behind the spot our trace used, about 10 ms).
+function float IGPlus_PRTShotTargetLead(Actor Other, vector Start, vector Dir) {
+	local int i;
+	local PlayerReplicationInfo PRI;
+	local bbPlayer P, Best;
+	local float Gap, BestGap;
+
+	if (bbPlayer(Other) != None && bbPlayer(Other).IGPlus_bPRTRulePlaced)
+		return bbPlayer(Other).IGPlus_PRTRuleDbgLead;
+	if (GameReplicationInfo == None)
+		return 0.0;
+	BestGap = 100.0;
+	for (i = 0; i < arraycount(GameReplicationInfo.PRIArray); ++i) {
+		PRI = GameReplicationInfo.PRIArray[i];
+		if (PRI == None) break;
+		P = bbPlayer(PRI.Owner);
+		if (P == None || P.Role != ROLE_SimulatedProxy || P.IGPlus_bPRTRulePlaced == false) continue;
+		Gap = IGPlus_LineCylinderGap(Start, Dir, P.Location, P.CollisionRadius, P.CollisionHeight);
+		if (Gap < BestGap) {
+			Best = P;
+			BestGap = Gap;
+		}
+	}
+	if (Best != None)
+		return Best.IGPlus_PRTRuleDbgLead;
+	return 0.0;
+}
+
 function Actor IGPlus_ClientShotTrace(
 	out vector HitLocation, out vector HitNormal, out vector HitOffset,
 	vector EndTrace, vector StartTrace, IGPlus_WeaponImplementationBase WB
 ) {
 	local Actor Other, Drawn;
 	local vector DrawnLoc, DrawnNormal;
-	local bool bRule;
+	local bool bRule, bPicture;
 
 	IGPlus_bShotDrawnDiffers = false;
 	IGPlus_bShotHead = false;
 	bRule = IGPlus_PRTRuleUsable();
+	bPicture = bRule == false && IGPlus_PRTPictureUsable();
 
 	IGPlus_LocationOffsetFix_RestoreAll();
 	if (bRule) {
 		// First against the bodies as drawn, for the count only.
 		Drawn = IGPlus_ClientShotTraceOnce(DrawnLoc, DrawnNormal, EndTrace, StartTrace, WB);
 		IGPlus_PRTRuleAll(true);
+	} else if (bPicture) {
+		IGPlus_PRTRuleAll(true, true);
 	}
 	Other = IGPlus_ClientShotTraceOnce(HitLocation, HitNormal, EndTrace, StartTrace, WB);
 	if (Other != None)
@@ -7228,12 +7358,19 @@ function Actor IGPlus_ClientShotTrace(
 		else
 			IGPlus_bShotHead = HitOffset.Z > 0.62 * Other.CollisionHeight;
 	}
+	IGPlus_PRTShotLead = 0.0;
 	if (bRule) {
+		IGPlus_PRTShotLead = IGPlus_PRTShotTargetLead(Other, StartTrace, Normal(EndTrace - StartTrace));
 		IGPlus_PRTRuleAll(false);
 		IGPlus_bShotDrawnDiffers = (Pawn(Drawn) != None) != (Pawn(Other) != None);
+	} else if (bPicture) {
+		// The same frame for every player: the engine moves them all on.
+		IGPlus_PRTShotLead = IGPlus_PRTShownLead;
+		IGPlus_PRTRuleAll(false);
+		Drawn = Other;
 	}
 	if (bDrawDebugData)
-		IGPlus_ClientShotTraceDebug(Other, Drawn, bRule, StartTrace, EndTrace);
+		IGPlus_ClientShotTraceDebug(Other, Drawn, bRule || bPicture, StartTrace, EndTrace, bPicture);
 	IGPlus_LocationOffsetFix_UndoRestoreAll();
 	return Other;
 }
@@ -7291,8 +7428,12 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 	local IGPlus_WeaponImplementationBase WB;
 	local string S;
 
-	if (IGPlus_ClientHitVerdict == 0)
-		return; // the client made no trace for this shot
+	if (IGPlus_ClientHitVerdict == 0) {
+		// The client made no trace for this shot, or the shot ran on another
+		// move than the client's (the shot's own move was lost).
+		IGPlus_HitStatNoData++;
+		return;
+	}
 	bServerHit = Pawn(Other) != None && Pawn(Other).PlayerReplicationInfo != None;
 	bClientHit = IGPlus_ClientHitVerdict != IGPLUS_HIT_MISS;
 	// The client's trace against the bodies as its screen drew them. The
@@ -7310,7 +7451,8 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 			if (bHead != (IGPlus_ClientHitVerdict == IGPLUS_HIT_HEAD))
 				IGPlus_HitStatHeadDiff++;
 		}
-		if (IGPlus_bShotDrawnDiffers == false)
+		// (A player with enableDebugData 1 gets the line for every shot.)
+		if (IGPlus_bShotDrawnDiffers == false && bDrawDebugData == false)
 			return;
 	} else if (bServerHit) {
 		IGPlus_HitStatServerOnly++;
@@ -7352,7 +7494,9 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 	// drawnOnly: only the drawn bodies said hit, so the old trace would have
 	// played a hit sound for nothing. drawnMissed: only they said miss.
 	if (bServerHit == bClientHit) {
-		if (bDrawnHit)
+		if (IGPlus_bShotDrawnDiffers == false)
+			S = "agree";
+		else if (bDrawnHit)
 			S = "drawnOnly";
 		else
 			S = "drawnMissed";
@@ -7360,7 +7504,7 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 		S = "serverOnly";
 	else
 		S = "clientOnly";
-	S = S@"drawnHit="$bDrawnHit;
+	S = S@"hit="$bServerHit@"drawnHit="$bDrawnHit;
 	if (Weapon != None)
 		S = S@"weapon="$Weapon.Class.Name;
 	if (Best != None && Best.PlayerReplicationInfo != None) {
@@ -7374,8 +7518,13 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 			D = zzUTPure.FindDummy(Best);
 		if (D != None)
 			S = S@"srvLoc="$IGPlus_FmtVec1(D.Location)@"srvVel="$IGPlus_FmtVec1(D.Velocity);
-		if (IGPlus_PRTUsable())
+		// srvGap: how old our snapshot of that player was at the time the
+		// shooter saw. srvCarry: for how long we carried it on.
+		if (IGPlus_PRTUsable()) {
 			S = S@"srvAge="$IGPlus_Fmt1(1000.0 * (IGPlus_PRTViewTimeNow() - IGPlus_PRTSeenTime));
+			if (D != None)
+				S = S@"srvGap="$IGPlus_Fmt1(1000.0 * D.CompGap)@"srvCarry="$IGPlus_Fmt1(1000.0 * D.CompCarry);
+		}
 	}
 	WB = IGPlus_GetWeaponImplementationBase();
 	if (WB != None)
@@ -7385,7 +7534,9 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 	if (IGPlus_bShotEyeRefused)
 		S = S@"eyeRefused";
 	S = S@"ping="$PlayerReplicationInfo.Ping;
-	IGPlus_EventLog("[DET-HIT]"@PlayerReplicationInfo.PlayerName@S);
+	// The server log gets the disagreements only.
+	if (bServerHit != bClientHit || IGPlus_bShotDrawnDiffers)
+		IGPlus_EventLog("[DET-HIT]"@PlayerReplicationInfo.PlayerName@S);
 	// The shooter's own line (enableDebugData 1).
 	if (bDrawDebugData)
 		ClientDebugMessage("Hit check (server):"@S);
@@ -9067,6 +9218,41 @@ simulated function IGPlus_DetNoteShot(float TS, float FireAnimTime) {
 	IGPlus_DetHolsterHoldUntilTS = TS + FireAnimTime;
 	if (Role < ROLE_Authority)
 		IGPlus_DetClientShotTS = TS;
+	else
+		IGPlus_DetServerShotTS = TS;
+}
+
+// Client: the server ran our last rifle or sniper shot on another move than
+// we did, later by Delta. That happens when the shot's own move is lost: with
+// the button held the server fires on the next move that arrives. Its refire
+// clock then runs Delta behind ours, and it stays there for as long as the
+// button is held: every later shot runs a move late on the server, on a move
+// that carries none of the shot's own data (what our trace said, the eye
+// height, the frame its target was carried on by). A rig with 5% of the
+// shooter's packets lost showed 23 shots in a row like that (Nov 13 2026).
+// The server decides when a shot runs, so we take over its clock: the same
+// sum from the same two numbers as on the server, so both sides find the next
+// shot due on the same move.
+function IGPlus_DetSyncShotClock(float ServerTS) {
+	local float Delta, Interval;
+
+	Delta = ServerTS - IGPlus_DetClientShotTS;
+	if (Abs(Delta) < 0.0008 || Abs(Delta) > 0.25)
+		return;
+	if (ST_SuperShockRifle(Weapon) != None) {
+		Interval = ST_SuperShockRifle(Weapon).ShotInterval();
+		ST_SuperShockRifle(Weapon).NextDetFireTS = ServerTS + Interval;
+	} else if (ST_SniperRifle(Weapon) != None) {
+		Interval = ST_SniperRifle(Weapon).PrimaryShotInterval();
+		ST_SniperRifle(Weapon).NextDetFireTS = ServerTS + Interval;
+	} else {
+		return;
+	}
+	IGPlus_DetClientShotTS = ServerTS;
+	IGPlus_DetLastShotTS = ServerTS;
+	IGPlus_DetHolsterHoldUntilTS = ServerTS + Interval;
+	if (bDrawDebugData)
+		ClientDebugMessage("Shot clock: the server ran the last shot"@IGPlus_Fmt1(1000.0 * Delta)@"ms off our move, clock moved");
 }
 
 simulated function bool IGPlus_DetSwitchDeferActive() {
@@ -9718,8 +9904,13 @@ function xxReplicateMove(
 	NewMove.IGPlus_SavedViewRotation = ViewRotation;
 	// Precise Rewind Time: what our last frame showed of the others.
 	NewMove.IGPlus_PRTData = 0;
-	if (IGPlus_PRTSeenAt > 0 && IGPlus_PRTShownTick != 0)
-		NewMove.IGPlus_PRTData = IGPlus_PRTPack(IGPlus_PRTShownTick, IGPlus_PRTShownAge);
+	if (IGPlus_PRTSeenAt > 0 && IGPlus_PRTShownTick != 0) {
+		if (bDetLocalShot)
+			NewMove.IGPlus_PRTData = IGPlus_PRTPack(IGPlus_PRTShownTick, IGPlus_PRTShownAge + IGPlus_PRTShotLead);
+		else
+			NewMove.IGPlus_PRTData = IGPlus_PRTPack(IGPlus_PRTShownTick, IGPlus_PRTShownAge);
+	}
+	IGPlus_PRTShotLead = 0.0;
 	// Only the shot frame's move (a single frame) carries the aimed view, so
 	// nothing else (dodges, other weapons) sees it.
 	if (bPSAAimFix && bDetLocalShot)
@@ -13275,10 +13466,16 @@ function xxPlayerTickEvents(float DeltaTime)
 			IGPlus_PRTShownTick = IGPlus_PRTSeenTick;
 			IGPlus_PRTShownAge = FMax(0, CurrentTime - DeltaTime - IGPlus_PRTSeenAt);
 			IGPlus_PRTShownTime = CurrentTime - DeltaTime;
+			IGPlus_PRTShownLead = IGPlus_PRTSeenLead;
 		}
 		if (IGPlus_PRTServerTick != IGPlus_PRTSeenTick) {
 			IGPlus_PRTSeenTick = IGPlus_PRTServerTick;
 			IGPlus_PRTSeenAt = CurrentTime;
+			IGPlus_PRTSeenLead = DeltaTime;
+		}
+		if (IGPlus_DetServerShotTS != IGPlus_DetServerShotSeen) {
+			IGPlus_DetServerShotSeen = IGPlus_DetServerShotTS;
+			IGPlus_DetSyncShotClock(IGPlus_DetServerShotTS);
 		}
 
 		if (IGPlus_DetTloc != none) {
@@ -13635,8 +13832,11 @@ function IGPlus_ApplyWarpFix(PlayerReplicationInfo PRI) {
 	// Jitter Compensation: the server holds this player still, their next
 	// move is late. Stop moving them along now, not after IGPlus_WarpFixDelay.
 	// Never set for a player who is not queued.
+	P.IGPlus_bPRTRuleHeld = false;
 	if (P.IGPlus_WarpFixData.bHold && Level.Pauser == "") {
 		P.SetLocation(P.IGPlus_WarpFixData.OldLocation);
+		P.IGPlus_bPRTRuleHeld = true;
+		P.IGPlus_PRTRuleHeldLoc = P.IGPlus_WarpFixData.OldLocation;
 		return;
 	}
 
@@ -13900,6 +14100,11 @@ event PreRender( canvas zzCanvas )
 			ApplyForcedSkins(zzPRI);
 			ApplyBrightskins(zzPRI);
 			IGPlus_ApplyWarpFix(zzPRI);
+			// Where this frame draws them: a shot in the next frame was aimed at this.
+			if (zzPRI.Owner != self && bbPlayer(zzPRI.Owner) != none && zzPRI.Owner.Role == ROLE_SimulatedProxy) {
+				bbPlayer(zzPRI.Owner).IGPlus_ShownLoc = zzPRI.Owner.Location;
+				bbPlayer(zzPRI.Owner).IGPlus_ShownFrame = IGPlus_FrameCount;
+			}
 		}
 	}
 
@@ -14128,6 +14333,10 @@ simulated function IGPlus_LocationOffsetFix_After(float DeltaTime) {
 		IGPlus_LocationOffsetFix_PrevServerVelocity = IGPlus_LocationOffsetFix_ServerVelocity;
 		IGPlus_LocationOffsetFix_PrevServerLocationTime = IGPlus_LocationOffsetFix_ServerLocationTime;
 		IGPlus_LocationOffsetFix_PrevServerLocationTick = IGPlus_LocationOffsetFix_ServerLocationTick;
+		IGPlus_LocationOffsetFix_PrevServerLocationLead = IGPlus_LocationOffsetFix_ServerLocationLead;
+		IGPlus_LocationOffsetFix_ServerLocationLead = 0.0;
+		if (bReplicatedVelocity)
+			IGPlus_LocationOffsetFix_ServerLocationLead = DeltaTime;
 		IGPlus_LocationOffsetFix_ServerLocation = Location;
 		IGPlus_LocationOffsetFix_ServerVelocity = Velocity;
 		IGPlus_LocationOffsetFix_ServerLocationTime = Level.TimeSeconds;
@@ -14171,6 +14380,16 @@ simulated function IGPlus_LocationOffsetFix_After(float DeltaTime) {
 		// tan(Alpha*) = -cos(Alpha)/sin(Alpha)
 		VelXpol.Z += (-CosAlpha / SinAlpha) * VSize(VelXpol*vect(1,1,0));
 	}
+
+	// The offset above compares the new update with the drawn body as if the
+	// body had stood still for this frame. So every update set the body back
+	// by one frame of movement, and the smoothing below let it catch up only
+	// in part: the body trailed its real spot the whole time it moved (two
+	// players' logs, Nov 13 2026: by a median 10 and 12 ms of movement at 480
+	// frames a second. A rig at 100 frames a second: 35 to 57 ms). The body
+	// is carried on by this frame first, as in a frame with no update.
+	if (bReplicatedLocation)
+		IGPlus_LocationOffsetFix_PredictionOffset += VelXpol * DeltaTime;
 
 	// dont let misprediction grow too large
 	// also, dont smoothly relocate teleporting players
