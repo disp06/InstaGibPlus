@@ -30,7 +30,7 @@ simulated function PostNetBeginPlay()
 				FakeLocation = br.LocalBioGlobDummy.Location;
 				br.LocalBioGlobDummy.Destroy();
 				SetLocation(FakeLocation);
-				ExtrapolationDelta = (Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping));
+				ExtrapolationDelta = (Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer));
 			}
 		}
 	} else {

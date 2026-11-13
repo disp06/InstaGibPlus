@@ -84,6 +84,8 @@ var config bool  bEnableSnapshotInterpolation;
 var config float SnapshotInterpSendHz;
 var config float SnapshotInterpRewindMs;
 var config bool  bEnableWarpFix;
+var config bool  bEnableJitterCompensation;
+var config int   JitterCompensationMax; // ms
 var config bool  bEnableCarcassCollision;
 var config bool  ShowTouchedPackage;
 var config bool  bEnableHitboxDebugMode;
@@ -143,6 +145,11 @@ function bool PushSafeAimActive() {
 
 function bool DeterministicTranslocatorActive() {
 	return bEnableDeterministicTranslocator && !bEnableInputReplication;
+}
+
+// Jitter Compensation is built on the ServerMove path.
+function bool JitterCompensationActive() {
+	return bEnableJitterCompensation && !bEnableInputReplication;
 }
 
 function DumpSetting(PlayerPawn P, string S) {
@@ -205,6 +212,8 @@ function DumpServerSettings(PlayerPawn P) {
 	DumpSetting(P, "SnapshotInterpSendHz");
 	DumpSetting(P, "SnapshotInterpRewindMs");
 	DumpSetting(P, "bEnableWarpFix");
+	DumpSetting(P, "bEnableJitterCompensation");
+	DumpSetting(P, "JitterCompensationMax");
 	DumpSetting(P, "MinClientRate");
 	DumpSetting(P, "MaxClientRate");
 	DumpSetting(P, "ForceSettingsLevel");
@@ -284,6 +293,8 @@ defaultproperties
 	SnapshotInterpSendHz=30.0
 	SnapshotInterpRewindMs=66.0
 	bEnableWarpFix=True
+	bEnableJitterCompensation=False
+	JitterCompensationMax=100
 	bEnableCarcassCollision=True
 	HitFeedbackMode=HFM_Always
 	ShowDamageNumberMode=DMG_Disabled

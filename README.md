@@ -1322,6 +1322,8 @@ Server settings can be found inside InstaGibPlus.ini.
 1. [SnapshotInterpRewindMs](#snapshotinterprewindms)
 1. [bEnableWarpFix](#benablewarpfix)
 1. [WarpFixDelay](#warpfixdelay)
+1. [bEnableJitterCompensation](#benablejittercompensation)
+1. [JitterCompensationMax](#jittercompensationmax)
 1. [FireTimeout](#firetimeout)
 1. [DetFireClockMargin](#detfireclockmargin)
 1. [bEnablePredictedSwitching](#benablepredictedswitching)
@@ -1795,6 +1797,8 @@ Selects which players get updates over more than [MaxJitterTime](#maxjittertime)
 
 All modes share [MaxJitterTime](#maxjittertime).
 
+Jitter bounding does not run while [bEnableJitterCompensation](#benablejittercompensation) is on.
+
 ## bEnableSnapshotInterpolation
 
 **Type: bool**  
@@ -1834,6 +1838,33 @@ If enabled, other players will not be extrapolated indefinitely on clients. Inst
 **Unit: s**  
 
 The amount of time that has to pass without an update from a player before forcing them back to their position on the server for all other clients. Also controls 
+
+## bEnableJitterCompensation
+
+**Type: bool**  
+**Default: False**  
+
+Evens out the movement of a player whose packets arrive late or in clumps.
+
+Without it the server runs every move the moment its packet arrives. When packets come late and together, that player stands still on the server and then covers all the missed time in one tick. Other players see a stop and a jump, and the player is hard to hit.
+
+If set to `True`, the server keeps the moves of such a player in a short queue. It plays them at the pace the player made them. Other players then see an even path. When the queue runs empty the player stands still until the next move arrives, and carries on from that spot. The server never guesses the missing input, so the queue gives that player no corrections.
+
+The player with the bad connection pays with delay. Their moves, shots and hit sounds come later by the time their moves wait, up to [JitterCompensationMax](#jittercompensationmax). Their ping on the scoreboard includes that delay. The delay shrinks again once their packets arrive on time.
+
+A player whose packets arrive on time is not queued. The server runs their moves on arrival, as with the setting off.
+
+Jitter Compensation replaces jitter bounding. [JitterBoundingMode](#jitterboundingmode) does not run while this is on. Requires bEnableInputReplication to be False. Needs a server on version 469.
+
+The server log gets a `[JITTER]` line when a player enters or leaves the queue. It also gets a `[JITTER-SUMMARY]` line for each player at the end of a map. That line says how late the player's moves arrived. It is written with the setting on or off.
+
+## JitterCompensationMax
+
+**Type: int**  
+**Default: 100**  
+**Unit: ms**  
+
+The most delay [bEnableJitterCompensation](#benablejittercompensation) gives one player. Movement that arrives later than this runs at once, as with the setting off.
 
 ## KillCamDelay
 

@@ -21,6 +21,9 @@ var float DetRedoTS;
 var int DetRedoData;
 // Precise Rewind Time: what the shooter's screen showed (bbPlayer.IGPlus_PRTNote).
 var int PRTData;
+// Jitter Compensation: a move waiting in the queue keeps the call as it came
+// (bbPlayer.IGPlus_JCIntercept). RawDelta is xxServerMove's MoveDeltaTime.
+var int RawDelta;
 var IGPlus_ServerMove Next;
 
 defaultproperties {

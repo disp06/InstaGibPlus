@@ -63,7 +63,7 @@ simulated function PostNetBeginPlay()
 					FakeRocket.Destroy();
 					SetLocation(FakeLocation);
 					IGPlus_bTookOver = true;
-					ExtrapolationDelta = (Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping));
+					ExtrapolationDelta = (Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer));
 					break;
 				}
 			}
@@ -81,7 +81,7 @@ simulated event Tick(float Delta) {
 		Velocity = IGPlus_HeldVelocity;
 		Acceleration = Normal(Velocity) * 50; // Flying.BeginState
 		if (IGPlus_bTookOver && InstigatingPlayer != None)
-			ExtrapolationDelta = Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping);
+			ExtrapolationDelta = Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer);
 		IGPlus_HeldVelocity = vect(0,0,0);
 		if (bCollideActors == false)
 			SetCollision(default.bCollideActors, default.bBlockActors, default.bBlockPlayers);
@@ -95,7 +95,7 @@ simulated event Tick(float Delta) {
 
     // Extrapolate locally to compensate for ping (if this is the SERVER projectile on client)
 	if (Physics != PHYS_None) {
-		NewXPolDelta = (Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping));
+		NewXPolDelta = (Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer));
 		Move(NewXPolDelta - ExtrapolationDelta);
 		ExtrapolationDelta = NewXPolDelta;
 	}

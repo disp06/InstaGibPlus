@@ -184,9 +184,9 @@ simulated event Tick(float Delta) {
 			return;
 		// Catch up to server
 		if (OldLocation == Location)
-			MoveSmooth(Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping));
+			MoveSmooth(Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer));
 		// Extrapolate locally to compensate for ping
-		NewXPolDelta = (Velocity * (0.0005 * Level.TimeDilation * InstigatingPlayer.PlayerReplicationInfo.Ping));
+		NewXPolDelta = (Velocity * class'bbPlayer'.static.IGPlus_OwnProjLead(InstigatingPlayer));
 		Move(NewXPolDelta - ExtrapolationDelta);
 		ExtrapolationDelta = NewXPolDelta;
 		return;
