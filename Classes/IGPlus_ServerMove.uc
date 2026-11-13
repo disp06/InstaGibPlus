@@ -21,6 +21,8 @@ var float DetRedoTS;
 var int DetRedoData;
 // Precise Rewind Time: what the shooter's screen showed (bbPlayer.IGPlus_PRTNote).
 var int PRTData;
+// The eye height the client traced this move's hitscan shot from (bbPlayer.IGPlus_EyePack). 0: none.
+var int ShotEye;
 var IGPlus_ServerMove Next;
 
 defaultproperties {

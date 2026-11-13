@@ -3,6 +3,11 @@ class IGPlus_WeaponImplementation extends Actor
 
 var WeaponSettings WeaponSettings;
 var WeaponSettingsRepl WSettingsRepl;
+// Server: 1 NextIG, 2 NextSA: this mode's ini section keeps only the
+// settings the mode uses (WeaponSettings.TrimConfigTo). 0: all of them.
+var int IGPlus_TrimMode;
+// Server: NextIG or NextSA runs, whatever section its settings come from.
+var bool IGPlus_bNextMode;
 // Server: the projectile SimulateProjectile is catching up now, and how much
 // of that catch-up is left after this step (ST_FlakSlug.NewExplode).
 var Projectile IGPlus_CatchUpProjectile;
@@ -13,7 +18,16 @@ replication {
 		WSettingsRepl;
 }
 
-final function InitWeaponSettings(string DefaultSectionName) {
+// Writes the settings to the ini, and for NextIG and NextSA takes the unused
+// ones out again. Every other mode loses the ones only those two read.
+// ClearConfig is a 469 function.
+function SaveWeaponSettings() {
+	WeaponSettings.SaveConfig();
+	if (int(Level.EngineVersion) >= 469 && (IGPlus_TrimMode != 0 || IGPlus_bNextMode == false))
+		WeaponSettings.TrimConfigTo(IGPlus_TrimMode);
+}
+
+final function InitWeaponSettings(string DefaultSectionName, optional int TrimMode) {
 	local Object Helper;
 	local string Options;
 	local int Pos;
@@ -34,8 +48,19 @@ final function InitWeaponSettings(string DefaultSectionName) {
 		SettingsName = DefaultSectionName;
 
 	Helper = new(XLevel, 'InstaGibPlus') class'Object';
-	WeaponSettings = new(Helper, SU.StringToName(SettingsName)) class'WeaponSettings';
-	WeaponSettings.SaveConfig();
+	// NextIG and NextSA start a new section with sub-tick compensation and
+	// Precise Rewind Time on (WeaponSettingsNext).
+	IGPlus_bNextMode = TrimMode != 0;
+	if (IGPlus_bNextMode)
+		WeaponSettings = new(Helper, SU.StringToName(SettingsName)) class'WeaponSettingsNext';
+	else
+		WeaponSettings = new(Helper, SU.StringToName(SettingsName)) class'WeaponSettings';
+	// Only the mode's own section is trimmed. With ?IGPlusWeaponSettings=
+	// pointing at another one, that section may hold another mode's values.
+	if (SettingsName ~= DefaultSectionName)
+		IGPlus_TrimMode = TrimMode;
+	SaveWeaponSettings();
+	Log("WeaponSettingsName="$SettingsName, 'IGPlus');
 	WSettingsRepl = Spawn(class'WeaponSettingsRepl');
 	WSettingsRepl.InitFromWeaponSettings(WeaponSettings);
 }

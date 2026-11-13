@@ -85,6 +85,9 @@ var localized string bEnableSubTickCompensationHelp;
 var UWindowCheckbox Chk_bEnablePreciseRewindTime;
 var localized string bEnablePreciseRewindTimeText;
 var localized string bEnablePreciseRewindTimeHelp;
+var UWindowCheckbox Chk_bEnableTrades;
+var localized string bEnableTradesText;
+var localized string bEnableTradesHelp;
 var IGPlus_EditControl Edit_PreciseRewindTimeMaxDeviationMs;
 var localized string PreciseRewindTimeMaxDeviationMsText;
 var localized string PreciseRewindTimeMaxDeviationMsHelp;
@@ -545,6 +548,7 @@ var float LineSpacing;
 var float SeparatorSpacing;
 var float ControlOffset;
 var bool bLastAdminState;
+var PlayerPawn LastOwnerPawn; // whose match the tab's values are from
 var bool bLoadSucceeded;
 var bool bPendingAdminLogin;
 var float LoginPendingUntilTime;
@@ -582,6 +586,15 @@ function bbPlayer ResolveOwnerBBPlayer() {
 
 function bbCHSpectator ResolveOwnerBBSpectator() {
 	return bbCHSpectator(ResolveOwnerPawn());
+}
+
+// 0: every weapon (ST_Mutator), 1: NextIG, 2: NextSA.
+function int WeaponSettingsMode() {
+	if (ResolveOwnerBBPlayer() != none)
+		return ResolveOwnerBBPlayer().IGPlus_WeaponSettingsMode;
+	if (ResolveOwnerBBSpectator() != none)
+		return ResolveOwnerBBSpectator().IGPlus_WeaponSettingsMode;
+	return 0;
 }
 
 function WeaponSettings FindWeaponSettingsObject() {
@@ -887,6 +900,7 @@ function SaveWeaponSettings() {
 	SaveWeaponSettingIfChanged(S, "bEnablePingCompensation", BoolToString(Chk_bEnablePingCompensation.bChecked));
 	SaveWeaponSettingIfChanged(S, "bEnableSubTickCompensation", BoolToString(Chk_bEnableSubTickCompensation.bChecked));
 	SaveWeaponSettingIfChanged(S, "bEnablePreciseRewindTime", BoolToString(Chk_bEnablePreciseRewindTime.bChecked));
+	SaveWeaponSettingIfChanged(S, "bEnableTrades", BoolToString(Chk_bEnableTrades.bChecked));
 	SaveWeaponSettingIfChanged(S, "PreciseRewindTimeMaxDeviationMs", Edit_PreciseRewindTimeMaxDeviationMs.GetValue());
 	SaveWeaponSettingIfChanged(S, "PingCompensationMax", Edit_PingCompensationMax.GetValue());
 	SaveWeaponSettingIfChanged(S, "bEnableAnimationAdaptiveHeadHitbox", BoolToString(Chk_bEnableAnimationAdaptiveHeadHitbox.bChecked));
@@ -1500,6 +1514,7 @@ function LoadWeaponSettings() {
 	Chk_bEnablePingCompensation.bChecked = S.bEnablePingCompensation;
 	Chk_bEnableSubTickCompensation.bChecked = S.bEnableSubTickCompensation;
 	Chk_bEnablePreciseRewindTime.bChecked = S.bEnablePreciseRewindTime;
+	Chk_bEnableTrades.bChecked = S.bEnableTrades;
 	Edit_PreciseRewindTimeMaxDeviationMs.SetValue(string(S.PreciseRewindTimeMaxDeviationMs));
 	Edit_PingCompensationMax.SetValue(string(S.PingCompensationMax));
 	Chk_bEnableAnimationAdaptiveHeadHitbox.bChecked = S.bEnableAnimationAdaptiveHeadHitbox;
@@ -1686,6 +1701,7 @@ function Created() {
 	Chk_bEnablePingCompensation = CreateCheckbox(bEnablePingCompensationText, bEnablePingCompensationHelp);
 	Chk_bEnableSubTickCompensation = CreateCheckbox(bEnableSubTickCompensationText, bEnableSubTickCompensationHelp);
 	Chk_bEnablePreciseRewindTime = CreateCheckbox(bEnablePreciseRewindTimeText, bEnablePreciseRewindTimeHelp);
+	Chk_bEnableTrades = CreateCheckbox(bEnableTradesText, bEnableTradesHelp);
 	Edit_PreciseRewindTimeMaxDeviationMs = CreateEdit(ECT_Integer, PreciseRewindTimeMaxDeviationMsText, PreciseRewindTimeMaxDeviationMsHelp, 8, 80);
 	Edit_PingCompensationMax = CreateEdit(ECT_Integer, PingCompensationMaxText, PingCompensationMaxHelp, 8, 80);
 	Chk_bEnableAnimationAdaptiveHeadHitbox = CreateCheckbox(bEnableAnimationAdaptiveHeadHitboxText, bEnableAnimationAdaptiveHeadHitboxHelp);
@@ -1866,8 +1882,29 @@ function BeforePaint(Canvas C, float X, float Y) {
 	local float Top;
 	local bool bAdmin;
 	local bool bShowSettings;
+	local bool bShowOther, bShowPickups, bShowSniper, bShowRifle;
+	local int Mode;
 
 	super.BeforePaint(C, X, Y);
+
+	// A new match gives us a new player, and this window outlives the match.
+	// What the tab holds is from the last one: load it again, or it shows the
+	// old match's values and Save would write them into this match's section.
+	if (ResolveOwnerPawn() != LastOwnerPawn) {
+		LastOwnerPawn = ResolveOwnerPawn();
+		bLastAdminState = false;
+		bLoadSucceeded = false;
+		bPendingAdminLogin = false;
+		NextRefreshRequestTime = 0; // the level clock started over
+	}
+
+	// Which ini section this match's weapon settings come from.
+	if (ResolveOwnerBBPlayer() != none && ResolveOwnerBBPlayer().IGPlus_WeaponSettingsName != "")
+		Lbl_Header.SetText(HeaderText@"-"@ResolveOwnerBBPlayer().IGPlus_WeaponSettingsName);
+	else if (ResolveOwnerBBSpectator() != none && ResolveOwnerBBSpectator().IGPlus_WeaponSettingsName != "")
+		Lbl_Header.SetText(HeaderText@"-"@ResolveOwnerBBSpectator().IGPlus_WeaponSettingsName);
+	else
+		Lbl_Header.SetText(HeaderText);
 
 	if (bPendingAdminLogin && GetNowTimeSeconds() > LoginPendingUntilTime)
 		bPendingAdminLogin = false;
@@ -1896,6 +1933,14 @@ function BeforePaint(Canvas C, float X, float Y) {
 	ConfigureResponsiveWeaponControls(C, WndWidth);
 	Top = PaddingY;
 	bShowSettings = bAdmin && AreWeaponSettingsLoaded();
+	// NextIG and NextSA use a handful of these settings. Show those only:
+	// the rewind and hitbox ones, and the mode's own weapon. Save writes what
+	// was changed, so a hidden setting keeps its value.
+	Mode = WeaponSettingsMode();
+	bShowOther = bShowSettings && Mode == 0;
+	bShowPickups = bShowSettings && Mode != 1; // instagib has no pickups
+	bShowSniper = bShowSettings && (Mode == 0 || Mode == 2);
+	bShowRifle = bShowSettings && (Mode == 0 || Mode == 1); // the instagib rifle: shock select, down, reduced hitbox
 
 	LayoutControl(Lbl_Header, true, WndWidth, Top);
 	LayoutControl(Lbl_Status, true, WndWidth, Top);
@@ -1904,17 +1949,17 @@ function BeforePaint(Canvas C, float X, float Y) {
 	LayoutControl(Lbl_Login, !bAdmin, WndWidth, Top);
 	LayoutPasswordControls(C, !bAdmin, WndWidth, Top);
 
-	LayoutControl(Lbl_EnhancedSplash, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_bEnableEnhancedSplashBio, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_bEnableEnhancedSplashShockCombo, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_bEnableEnhancedSplashShockProjectile, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_bEnableEnhancedSplashRipperSecondary, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_bEnableEnhancedSplashFlakSlug, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_bEnableEnhancedSplashRockets, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_bEnhancedSplashIgnoreStationaryPawns, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SplashMaxDiffraction, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SplashMinDiffractionDistance, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SplashWraparoundRadiusScale, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_EnhancedSplash, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_bEnableEnhancedSplashBio, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_bEnableEnhancedSplashShockCombo, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_bEnableEnhancedSplashShockProjectile, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_bEnableEnhancedSplashRipperSecondary, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_bEnableEnhancedSplashFlakSlug, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_bEnableEnhancedSplashRockets, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_bEnhancedSplashIgnoreStationaryPawns, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_SplashMaxDiffraction, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_SplashMinDiffractionDistance, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_SplashWraparoundRadiusScale, bShowOther, WndWidth, Top);
 
 	LayoutControl(Lbl_Global, bShowSettings, WndWidth, Top);
 	LayoutControl(Edit_HeadHalfHeight, bShowSettings, WndWidth, Top);
@@ -1925,167 +1970,168 @@ function BeforePaint(Canvas C, float X, float Y) {
 	LayoutControl(Edit_PreciseRewindTimeMaxDeviationMs, bShowSettings, WndWidth, Top);
 	LayoutControl(Edit_PingCompensationMax, bShowSettings, WndWidth, Top);
 	LayoutControl(Chk_bEnableAnimationAdaptiveHeadHitbox, bShowSettings, WndWidth, Top);
+	LayoutControl(Chk_bEnableTrades, bShowSettings && Mode != 0, WndWidth, Top); // NextIG and NextSA only
 
-	LayoutControl(Lbl_Pickups, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_InvisibilityDuration, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShieldBeltCharge, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ArmorCharge, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ThighPadsCharge, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HealthPackHealingAmount, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Pickups, bShowPickups, WndWidth, Top);
+	LayoutControl(Edit_InvisibilityDuration, bShowPickups, WndWidth, Top);
+	LayoutControl(Edit_ShieldBeltCharge, bShowPickups, WndWidth, Top);
+	LayoutControl(Edit_ArmorCharge, bShowPickups, WndWidth, Top);
+	LayoutControl(Edit_ThighPadsCharge, bShowPickups, WndWidth, Top);
+	LayoutControl(Edit_HealthPackHealingAmount, bShowPickups, WndWidth, Top);
 
-	LayoutControl(Lbl_Warhead, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_WarheadSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_WarheadDownTime, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Warhead, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_WarheadSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_WarheadDownTime, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Sniper, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SniperSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SniperDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SniperDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SniperHeadshotDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SniperMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SniperHeadshotMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_SniperReloadTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_SniperUseReducedHitbox, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Sniper, bShowSniper, WndWidth, Top);
+	LayoutControl(Edit_SniperSelectTime, bShowSniper, WndWidth, Top);
+	LayoutControl(Edit_SniperDownTime, bShowSniper, WndWidth, Top);
+	LayoutControl(Edit_SniperDamage, bShowSniper, WndWidth, Top);
+	LayoutControl(Edit_SniperHeadshotDamage, bShowSniper, WndWidth, Top);
+	LayoutControl(Edit_SniperMomentum, bShowSniper, WndWidth, Top);
+	LayoutControl(Edit_SniperHeadshotMomentum, bShowSniper, WndWidth, Top);
+	LayoutControl(Edit_SniperReloadTime, bShowSniper, WndWidth, Top);
+	LayoutControl(Chk_SniperUseReducedHitbox, bShowSniper, WndWidth, Top);
 
-	LayoutControl(Lbl_Rocket, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EightballSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EightballDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RocketDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RocketSelfDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RocketHurtRadius, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RocketMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RocketSpreadSpacingDegrees, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RocketSpeed, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_GrenadeDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_GrenadeHurtRadius, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_GrenadeMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_RocketCompensatePing, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Rocket, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EightballSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EightballDownTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RocketDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RocketSelfDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RocketHurtRadius, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RocketMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RocketSpreadSpacingDegrees, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RocketSpeed, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_GrenadeDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_GrenadeHurtRadius, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_GrenadeMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_RocketCompensatePing, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Flak, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakPostSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakChunkDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakChunkMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakChunkLifespan, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakChunkDropOffStart, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakChunkDropOffEnd, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakChunkDropOffDamageRatio, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_FlakChunkRandomSpread, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakChunkRandomSpreadSize, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakSlugDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakSlugHurtRadius, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_FlakSlugMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_FlakCompensatePing, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Flak, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakPostSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakDownTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakChunkDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakChunkMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakChunkLifespan, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakChunkDropOffStart, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakChunkDropOffEnd, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakChunkDropOffDamageRatio, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_FlakChunkRandomSpread, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakChunkRandomSpreadSize, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakSlugDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakSlugHurtRadius, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_FlakSlugMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_FlakCompensatePing, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Ripper, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperHeadshotDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperHeadShotDamageWallMultiplier, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperHeadshotMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperPrimaryDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperPrimaryDamageWallMultiplier, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperPrimaryMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperSecondaryHurtRadius, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperSecondaryDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_RipperSecondaryMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_RipperCompensatePing, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Ripper, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperDownTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperHeadshotDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperHeadShotDamageWallMultiplier, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperHeadshotMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperPrimaryDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperPrimaryDamageWallMultiplier, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperPrimaryMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperSecondaryHurtRadius, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperSecondaryDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_RipperSecondaryMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_RipperCompensatePing, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Minigun, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunSpinUpTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunUnwindTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunBulletInterval, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunAlternateBulletInterval, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunMinDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunMaxDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunAltMinDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_MinigunAltMaxDamage, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Minigun, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunDownTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunSpinUpTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunUnwindTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunBulletInterval, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunAlternateBulletInterval, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunMinDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunMaxDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunAltMinDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_MinigunAltMaxDamage, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Pulse, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseSphereDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseSphereMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseSphereSpeed, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseSphereFireRate, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseSphereCollisionRadius, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseSphereCollisionHeight, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseBoltDPS, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseBoltMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseBoltMaxAccumulate, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseBoltGrowthDelay, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_PulseBoltMaxSegments, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_PulseCompensatePing, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Pulse, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseDownTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseSphereDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseSphereMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseSphereSpeed, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseSphereFireRate, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseSphereCollisionRadius, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseSphereCollisionHeight, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseBoltDPS, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseBoltMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseBoltMaxAccumulate, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseBoltGrowthDelay, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_PulseBoltMaxSegments, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_PulseCompensatePing, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Shock, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockBeamDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockBeamMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_ShockBeamUseReducedHitbox, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockProjectileDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockProjectileHurtRadius, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockProjectileMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_ShockProjectileBlockBullets, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_ShockProjectileBlockFlakChunk, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_ShockProjectileBlockFlakSlug, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_ShockProjectileTakeDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockProjectileHealth, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockComboDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockComboMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockComboHurtRadius, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_ShockComboRewindMax, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Shock, bShowRifle, WndWidth, Top);
+	LayoutControl(Edit_ShockSelectTime, bShowRifle, WndWidth, Top);
+	LayoutControl(Edit_ShockDownTime, bShowRifle, WndWidth, Top);
+	LayoutControl(Edit_ShockBeamDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_ShockBeamMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_ShockBeamUseReducedHitbox, bShowRifle, WndWidth, Top);
+	LayoutControl(Edit_ShockProjectileDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_ShockProjectileHurtRadius, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_ShockProjectileMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_ShockProjectileBlockBullets, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_ShockProjectileBlockFlakChunk, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_ShockProjectileBlockFlakSlug, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_ShockProjectileTakeDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_ShockProjectileHealth, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_ShockComboDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_ShockComboMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_ShockComboHurtRadius, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_ShockComboRewindMax, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Bio, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_BioSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_BioDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_BioDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_BioMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_BioPrimaryInstantExplosion, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_BioAltDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_BioAltMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_BioHurtRadiusBase, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_BioHurtRadiusMax, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_BioCompensatePing, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Bio, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_BioSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_BioDownTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_BioDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_BioMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_BioPrimaryInstantExplosion, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_BioAltDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_BioAltMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_BioHurtRadiusBase, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_BioHurtRadiusMax, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_BioCompensatePing, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Enforcer, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerReloadTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerReloadTimeAlt, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerReloadTimeRepeat, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_EnforcerUseReducedHitbox, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_EnforcerAllowDouble, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerDamageDouble, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerMomentumDouble, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerShotOffsetDouble, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerReloadTimeDouble, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerReloadTimeAltDouble, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_EnforcerReloadTimeRepeatDouble, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Enforcer, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerDownTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerReloadTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerReloadTimeAlt, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerReloadTimeRepeat, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_EnforcerUseReducedHitbox, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_EnforcerAllowDouble, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerDamageDouble, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerMomentumDouble, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerShotOffsetDouble, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerReloadTimeDouble, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerReloadTimeAltDouble, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_EnforcerReloadTimeRepeatDouble, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Hammer, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerSelfDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerSelfMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerAltDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerAltMomentum, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerAltSelfDamage, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_HammerAltSelfMomentum, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Hammer, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerDownTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerSelfDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerSelfMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerAltDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerAltMomentum, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerAltSelfDamage, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_HammerAltSelfMomentum, bShowOther, WndWidth, Top);
 
-	LayoutControl(Lbl_Translocator, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_TranslocatorSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_TranslocatorOutSelectTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_TranslocatorDownTime, bShowSettings, WndWidth, Top);
-	LayoutControl(Edit_TranslocatorHealth, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_TranslocatorCompensatePing, bShowSettings, WndWidth, Top);
+	LayoutControl(Lbl_Translocator, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_TranslocatorSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_TranslocatorOutSelectTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_TranslocatorDownTime, bShowOther, WndWidth, Top);
+	LayoutControl(Edit_TranslocatorHealth, bShowOther, WndWidth, Top);
+	LayoutControl(Chk_TranslocatorCompensatePing, bShowOther, WndWidth, Top);
 
 	DesiredHeight = Top + PaddingY;
 }
@@ -2207,6 +2253,8 @@ defaultproperties
 	bEnableSubTickCompensationHelp="Weapon setting: Enable Sub Tick Compensation"
 	bEnablePreciseRewindTimeText="Enable Precise Rewind Time"
 	bEnablePreciseRewindTimeHelp="Weapon setting: rewind hitscan shots to the moment the shooter's screen showed"
+	bEnableTradesText="Enable Trades"
+	bEnableTradesHelp="Weapon setting: a shot from a player who just died still counts. NextIG and NextSA read this in place of the server setting"
 	PreciseRewindTimeMaxDeviationMsText="Precise Rewind Time Max Deviation"
 	PreciseRewindTimeMaxDeviationMsHelp="Weapon setting: how many ms the client's rewind may differ from the server's own ping before the server uses its old rewind"
 	PingCompensationMaxText="Ping Compensation Max"

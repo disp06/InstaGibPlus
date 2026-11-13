@@ -238,13 +238,6 @@ var localized string MinClientRateHelp;
 var IGPlus_EditControl Edit_MaxClientRate;
 var localized string MaxClientRateText;
 var localized string MaxClientRateHelp;
-var IGPlus_ComboBox Cmb_ForceSettingsLevel;
-var localized string ForceSettingsLevelText;
-var localized string ForceSettingsLevelHelp;
-var localized string ForceSettingsLevelOff;
-var localized string ForceSettingsLevelPostNetBeginPlay;
-var localized string ForceSettingsLevelSpawnNotify;
-var localized string ForceSettingsLevelIntervalled;
 
 var UWindowLabelControl Lbl_Debug;
 var localized string DebugText;
@@ -261,6 +254,7 @@ var float LineSpacing;
 var float SeparatorSpacing;
 var float ControlOffset;
 var bool bLastAdminState;
+var PlayerPawn LastOwnerPawn; // whose match the tab's values are from
 var bool bLoadSucceeded;
 var bool bPendingAdminLogin;
 var float LoginPendingUntilTime;
@@ -695,7 +689,6 @@ function SaveServerSettings() {
 
 	SaveServerSettingIfChanged(S, "MinClientRate", Edit_MinClientRate.GetValue());
 	SaveServerSettingIfChanged(S, "MaxClientRate", Edit_MaxClientRate.GetValue());
-	SaveServerSettingIfChanged(S, "ForceSettingsLevel", string(Cmb_ForceSettingsLevel.GetSelectedIndex()));
 
 	SaveServerSettingIfChanged(S, "ShowTouchedPackage", BoolToString(Chk_ShowTouchedPackage.bChecked));
 	SaveServerSettingIfChanged(S, "bEnableHitboxDebugMode", BoolToString(Chk_bEnableHitboxDebugMode.bChecked));
@@ -1048,7 +1041,6 @@ function ConfigureResponsiveServerControls(Canvas C, float ControlWidth) {
 	ConfigureFixedWidthEdit(Edit_Timeouts, C, ControlWidth, 80);
 	ConfigureFixedWidthEdit(Edit_MinClientRate, C, ControlWidth, 80);
 	ConfigureFixedWidthEdit(Edit_MaxClientRate, C, ControlWidth, 80);
-	ConfigureFixedWidthCombo(Cmb_ForceSettingsLevel, C, ControlWidth, 180);
 }
 
 function LoadServerSettings() {
@@ -1119,7 +1111,6 @@ function LoadServerSettings() {
 
 	Edit_MinClientRate.SetValue(string(S.MinClientRate));
 	Edit_MaxClientRate.SetValue(string(S.MaxClientRate));
-	Cmb_ForceSettingsLevel.SetSelectedIndex(Clamp(int(S.ForceSettingsLevel), 0, 3));
 
 	Chk_ShowTouchedPackage.bChecked = S.ShowTouchedPackage;
 	Chk_bEnableHitboxDebugMode.bChecked = S.bEnableHitboxDebugMode;
@@ -1234,11 +1225,6 @@ function Created() {
 	Lbl_ClientEnforcement = CreateSeparator(ClientEnforcementText);
 	Edit_MinClientRate = CreateEdit(ECT_Integer, MinClientRateText, MinClientRateHelp, 8, 80);
 	Edit_MaxClientRate = CreateEdit(ECT_Integer, MaxClientRateText, MaxClientRateHelp, 8, 80);
-	Cmb_ForceSettingsLevel = CreateComboBox(ForceSettingsLevelText, ForceSettingsLevelHelp, false, 180);
-	Cmb_ForceSettingsLevel.AddItem(ForceSettingsLevelOff);
-	Cmb_ForceSettingsLevel.AddItem(ForceSettingsLevelPostNetBeginPlay);
-	Cmb_ForceSettingsLevel.AddItem(ForceSettingsLevelSpawnNotify);
-	Cmb_ForceSettingsLevel.AddItem(ForceSettingsLevelIntervalled);
 
 	Lbl_Debug = CreateSeparator(DebugText);
 	Chk_ShowTouchedPackage = CreateCheckbox(ShowTouchedPackageText, ShowTouchedPackageHelp);
@@ -1263,6 +1249,25 @@ function BeforePaint(Canvas C, float X, float Y) {
 	local bool bShowSettings;
 
 	super.BeforePaint(C, X, Y);
+
+	// A new match gives us a new player, and this window outlives the match.
+	// What the tab holds is from the last one: load it again, or it shows the
+	// old match's values and Save would write them into this match's section.
+	if (ResolveOwnerPawn() != LastOwnerPawn) {
+		LastOwnerPawn = ResolveOwnerPawn();
+		bLastAdminState = false;
+		bLoadSucceeded = false;
+		bPendingAdminLogin = false;
+		NextRefreshRequestTime = 0; // the level clock started over
+	}
+
+	// Which ini section this match's server settings come from.
+	if (ResolveOwnerBBPlayer() != none && ResolveOwnerBBPlayer().IGPlus_ServerSettingsName != "")
+		Lbl_Header.SetText(HeaderText@"-"@ResolveOwnerBBPlayer().IGPlus_ServerSettingsName);
+	else if (ResolveOwnerBBSpectator() != none && ResolveOwnerBBSpectator().IGPlus_ServerSettingsName != "")
+		Lbl_Header.SetText(HeaderText@"-"@ResolveOwnerBBSpectator().IGPlus_ServerSettingsName);
+	else
+		Lbl_Header.SetText(HeaderText);
 
 	if (bPendingAdminLogin && GetNowTimeSeconds() > LoginPendingUntilTime)
 		bPendingAdminLogin = false;
@@ -1366,7 +1371,6 @@ function BeforePaint(Canvas C, float X, float Y) {
 	LayoutControl(Lbl_ClientEnforcement, bShowSettings, WndWidth, Top);
 	LayoutControl(Edit_MinClientRate, bShowSettings, WndWidth, Top);
 	LayoutControl(Edit_MaxClientRate, bShowSettings, WndWidth, Top);
-	LayoutControl(Cmb_ForceSettingsLevel, bShowSettings, WndWidth, Top);
 
 	LayoutControl(Lbl_Debug, bShowSettings, WndWidth, Top);
 	LayoutControl(Chk_ShowTouchedPackage, bShowSettings, WndWidth, Top);
@@ -1602,12 +1606,6 @@ defaultproperties
 	MinClientRateHelp="Minimum allowed client netspeed/rate"
 	MaxClientRateText="Max Client Rate"
 	MaxClientRateHelp="Maximum allowed client netspeed/rate"
-	ForceSettingsLevelText="Force Settings Level"
-	ForceSettingsLevelHelp="When to enforce client settings against defaults\\nOff --> Disabled\\nPostNetBeginPlay --> Check after PostNetBeginPlay\\nSpawnNotify --> Check on spawn\\nIntervalled --> Periodic checks"
-	ForceSettingsLevelOff="Off"
-	ForceSettingsLevelPostNetBeginPlay="PostNetBeginPlay"
-	ForceSettingsLevelSpawnNotify="SpawnNotify"
-	ForceSettingsLevelIntervalled="Intervalled"
 
 	DebugText="Debug"
 	ShowTouchedPackageText="Show Touched Package"

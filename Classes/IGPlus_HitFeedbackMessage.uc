@@ -15,6 +15,8 @@ static function ClientReceive(
 	local ClientSettings Settings;
 	local bool bInstigator;
 	local bool bViewTarget;
+	local bool bServerOnly;
+	local bool bClientPlayed;
 	local bbPlayer bbP;
 	
 	bbP = bbPlayer(P);
@@ -36,7 +38,18 @@ static function ClientReceive(
 	if ((bInstigator || bViewTarget) == false)
 		return;
 
-	if (bViewTarget || Settings == none || Settings.HitMarkerSource == HMSRC_Server)
+	// The Client source only counts while we carry a weapon that plays its own
+	// hit response (bbPlayer.IGPlus_HasClientHitResponse). With any other
+	// weapon nothing would play at all.
+	bServerOnly = bViewTarget || Settings == none || bbP == none || bbP.IGPlus_HasClientHitResponse() == false;
+	// A deterministic shot whose own trace played this hit at the click
+	// (bbPlayer.IGPlus_ClientShotVerdict): what the Client source played then
+	// is not played again. A hit only the server saw plays here, a ping late.
+	bClientPlayed = bInstigator && Settings != none && bbP != none && bbP.IGPlus_TakeClientHit();
+	if (bClientPlayed)
+		bServerOnly = false;
+
+	if (bServerOnly || Settings.HitMarkerSource == HMSRC_Server)
 		class'bbPlayerStatics'.static.PlayHitMarker(P, Settings, Abs(Sw), RelatedPRI_2.Team, RelatedPRI_1.Team);
 
 
@@ -45,6 +58,6 @@ static function ClientReceive(
 	else if (bViewTarget && bbCHSpectator(P) != none && Settings != none && Settings.bSpectatorShowDamageNumbers && bbCHSpectator(P).ShowDamageNumberMode != DMG_Disabled)
 		class'bbPlayerStatics'.static.PlayDamageMarker(P, Abs(Sw), RelatedPRI_2.Team, RelatedPRI_1.Team, RelatedPRI_1);
 
-	if (bViewTarget || Settings == none || Settings.HitSoundSource == HSSRC_Server)
+	if (bServerOnly || Settings.HitSoundSource == HSSRC_Server)
 		class'bbPlayerStatics'.static.PlayHitSound(P, Settings, Abs(Sw), RelatedPRI_2.Team, RelatedPRI_1.Team);
 }

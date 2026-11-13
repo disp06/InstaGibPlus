@@ -53,6 +53,10 @@ var bool IGPlus_ServerSettingsMenuCanEdit;
 var Object IGPlus_WeaponSettingsHelper;
 var WeaponSettings IGPlus_WeaponSettingsMenuData;
 var bool IGPlus_WeaponSettingsMenuLoaded;
+// As bbPlayer's: the ini sections of this match's settings, for the menu.
+var string IGPlus_ServerSettingsName;
+var string IGPlus_WeaponSettingsName;
+var byte IGPlus_WeaponSettingsMode;
 var bool IGPlus_WeaponSettingsMenuCanEdit;
 
 var int ShowDamageNumberMode;
@@ -80,7 +84,10 @@ replication
 		IGPlus_WeaponSettingsDone; //, xxClientActivateMover;
 
 	reliable if (bNetOwner && Role == ROLE_Authority)
-		ShowDamageNumberMode;
+		ShowDamageNumberMode,
+		IGPlus_ServerSettingsName,
+		IGPlus_WeaponSettingsName,
+		IGPlus_WeaponSettingsMode;
 
 	reliable if (Role < ROLE_Authority)
 		IGPlus_ServerRequestSettings,
@@ -356,8 +363,12 @@ event PostBeginPlay()
 	VersionInfoClass = class<Info>(DynamicLoadObject(class'StringUtils'.static.GetPackage()$".VersionInfo", class'class', true));
 	VersionInfo = Spawn(VersionInfoClass);
 
-	if (Role == ROLE_Authority && zzUTPure != none && zzUTPure.Settings != none)
-		ShowDamageNumberMode = int(zzUTPure.Settings.ShowDamageNumberMode);
+	if (Role == ROLE_Authority && zzUTPure != none && zzUTPure.Settings != none) {
+		ShowDamageNumberMode = zzUTPure.IGPlus_DamageNumberMode();
+		IGPlus_ServerSettingsName = string(zzUTPure.Settings.Name);
+		IGPlus_WeaponSettingsName = zzUTPure.IGPlus_WeaponSettingsName();
+		IGPlus_WeaponSettingsMode = zzUTPure.IGPlus_WeaponSettingsMode();
+	}
 
 	InitSettings();
 }
@@ -898,34 +909,6 @@ event ReceiveLocalizedMessage( class<LocalMessage> Message, optional int Sw, opt
 	Super.ReceiveLocalizedMessage(Message, Sw, RelatedPRI_1, RelatedPRI_2, OptionalObject);
 }
 
-exec function HitSounds(int b)
-{
-	Settings.HitSound = b;
-	Settings.SaveConfig();
-	if (b == 0)
-		ClientMessage("HitSounds: Off");
-	else if (b == 1)
-		ClientMessage("HitSounds: Classic Stinger");
-	else if (b == 2)
-		ClientMessage("HitSounds: Dynamic Cowbell (BWOOM BWOOM BWANG BWANG)");
-	else if (b == 3)
-		ClientMessage("HitSounds: Ouchies!");
-}
-
-exec function TeamHitSounds(int b)
-{
-	Settings.TeamHitSound = b;
-	Settings.SaveConfig();
-	if (b == 0)
-		ClientMessage("TeamHitSounds: Off");
-	else if (b == 1)
-		ClientMessage("TeamHitSounds: Classic Stinger");
-	else if (b == 2)
-		ClientMessage("TeamHitSounds: Dynamic Cowbell (BWOOM BWOOM BWANG BWANG)");
-	else if (b == 3)
-		ClientMessage("TeamHitSounds: Ouchies!");
-}
-
 exec function FindFlag()
 {
 	local PlayerReplicationInfo zzPRI,zzLastFC,zzFC;
@@ -1138,7 +1121,6 @@ function IGPlus_ServerRequestSettings() {
 
 	IGPlus_ServerSendSetting("MinClientRate");
 	IGPlus_ServerSendSetting("MaxClientRate");
-	IGPlus_ServerSendSetting("ForceSettingsLevel");
 
 	IGPlus_ServerSendSetting("ShowTouchedPackage");
 	IGPlus_ServerSendSetting("HitFeedbackMode");
@@ -1224,6 +1206,7 @@ function IGPlus_WeaponRequestSettings() {
 	IGPlus_WeaponSendSetting("bEnablePingCompensation");
 	IGPlus_WeaponSendSetting("bEnableSubTickCompensation");
 	IGPlus_WeaponSendSetting("bEnablePreciseRewindTime");
+	IGPlus_WeaponSendSetting("bEnableTrades");
 	IGPlus_WeaponSendSetting("PreciseRewindTimeMaxDeviationMs");
 	IGPlus_WeaponSendSetting("PingCompensationMax");
 	IGPlus_WeaponSendSetting("bEnableAnimationAdaptiveHeadHitbox");

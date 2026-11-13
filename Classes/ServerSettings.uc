@@ -2,11 +2,6 @@
 	config(InstaGibPlus)
 	perobjectconfig;
 
-var config float HeadshotDamage;
-var config float SniperSpeed;
-var config float SniperDamagePri;
-
-var config bool SetPendingWeapon;
 var config bool NNAnnouncer;
 
 // Enable or disable.
@@ -27,7 +22,6 @@ var config bool bUseClickboard;	// Use clickboard in Tournament Mode or not
 var config int MinClientRate;		// Minimum allowed client rate.
 var config int MaxClientRate;     // Maximum allowed client rate.
 var config bool bAdvancedTeamSay;	// Enable or disable Advanced TeamSay.
-var config byte ForceSettingsLevel;	// 0 = off, 1 = PostNetBeginPlay, 2 = SpawnNotify, 3 = Intervalled
 var config bool bWarmup;		// Enable or disable warmup. (bTournament only)
 var config int WarmupTimeLimit; // Warmup lasts at most this long
 var config bool bCoaches;		// Enable or disable coaching. (bTournament only)
@@ -41,8 +35,6 @@ var config bool bDelayedPickupSpawn;	// Enable or disable delayed first pickup s
 var config bool bUseFastWeaponSwitch;
 var config bool bTellSpectators;	// Enable or disable telling spectators of reason for kicks.
 var config string PlayerPacks[8];	// Config list of supported player packs
-var config int DefaultHitSound, DefaultTeamHitSound;
-var config bool bForceDefaultHitSounds;
 var config int TeleRadius;
 var config int ThrowVelocity;	// How far a player can throw weapons
 var config bool  bForceDemo;		// Forces clients to do demos.
@@ -207,7 +199,6 @@ function DumpServerSettings(PlayerPawn P) {
 	DumpSetting(P, "bEnableWarpFix");
 	DumpSetting(P, "MinClientRate");
 	DumpSetting(P, "MaxClientRate");
-	DumpSetting(P, "ForceSettingsLevel");
 	DumpSetting(P, "ShowTouchedPackage");
 	DumpSetting(P, "HitFeedbackMode");
 	DumpSetting(P, "ShowDamageNumberMode");
@@ -216,9 +207,6 @@ function DumpServerSettings(PlayerPawn P) {
 
 defaultproperties
 {
-	SniperDamagePri=60
-	HeadshotDamage=100
-	SniperSpeed=1.0
 	bUTPureEnabled=True
 	Advertise=1
 	AdvertiseMsg=1
@@ -233,14 +221,11 @@ defaultproperties
 	MinClientRate=10000
 	MaxClientRate=25000
 	bAdvancedTeamSay=True
-	ForceSettingsLevel=2
 	bWarmup=True
 	ForceModels=1
 	ImprovedHUD=1
 	bDelayedPickupSpawn=False
 	bUseFastWeaponSwitch=False
-	DefaultHitSound=2
-	DefaultTeamHitSound=3
 	TeleRadius=210
 	ThrowVelocity=750
 	NNAnnouncer=True

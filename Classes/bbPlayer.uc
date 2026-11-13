@@ -17,7 +17,6 @@ var float	zzCVDelay;		// Delay for CenterView usage
 var int		zzMinimumNetspeed;	// Default 10000, it's the minimum netspeed a client may have.
 var int		zzMaximumNetspeed;	// Default 25000, it's the maximum netspeed a client may have.
 var float	zzWaitTime;		// Used for diverse waiting.
-var int		zzForceSettingsLevel;	// The Anti-Default/Ini check force.
 var bool	zzbForceModels;		// Allow/Enable/Force Models for clients.
 var bool	zzbForceDemo;		// Set true by server to force client to do demo.
 var bool	zzbGameStarted;	// Set to true when Pawn spawns first time (ModifyPlayer)
@@ -61,7 +60,6 @@ var float	zzOrigFOV;		// Original FOV for TrackFOV = 1
 var string	FakeClass;		// Class that the model replaces
 var string	zzMyPacks;		// Defined only for defaults
 var bool	zzbBadGuy;		// BadGuy! (Avoid kick spamming)
-var int		zzOldForceSettingsLevel;	// Kept to see if things change.
 var int     zzRecentDmgGiven, zzRecentTeamDmgGiven, TeleRadius;
 var name    zzDefaultWeapon;
 var float   zzLastHitSound, zzLastTeamHitSound;
@@ -373,6 +371,7 @@ var int IGPlus_PRTSeenTick;          // client: the newest tick we got
 var float IGPlus_PRTSeenAt;          // client: our time when it arrived
 var int IGPlus_PRTShownTick;         // client: the update our last frame showed
 var float IGPlus_PRTShownAge;        // client: how far past it that frame was
+var float IGPlus_PRTShownTime;       // client: that frame's time
 var float IGPlus_PRTNoteTS;          // server: when the last shot's report arrived
 var int IGPlus_PRTNoteTick;          // server: our tick count then
 var float IGPlus_PRTSeenTime;        // server: the update the shooter's screen showed
@@ -470,6 +469,38 @@ var int IGPlus_DetStatJumpDropped; // jumps at a landing that only the server to
 // commands the two sides resolved differently, and seconds with shots held
 // by the fire clock margin. The first two together at most one a second.
 var int IGPlus_StatShotRefused, IGPlus_StatShotUnbound, IGPlus_StatSwitchMismatch, IGPlus_StatClockHolds;
+// Instant hit feedback (NextIG's rifle, NextSA's sniper). The client's own
+// trace plays the hit sound and marker at the click, and what it said rides
+// the shot's move (DetChargeData). The server's trace still decides the hit,
+// and counts how often the two disagree ([DET-SUMMARY], [DET-HIT]).
+// Above 7, so never taken for a translocator action.
+const IGPLUS_HIT_MISS = 8;
+const IGPLUS_HIT_BODY = 9;
+const IGPLUS_HIT_HEAD = 10;
+// Added to the verdict: the same shot against the bodies as the screen drew
+// them said the opposite (IGPlus_ClientShotTrace).
+const IGPLUS_HIT_DRAWNDIFF = 4;
+var bool IGPlus_bShotDrawnDiffers;  // client: the last trace's. Server: the running move's
+var bool IGPlus_bShotHead;          // client: the last trace hit a head
+var int IGPlus_HitStatDrawnDiff, IGPlus_HitStatDrawnRight;
+var int IGPlus_HitStatDeadShots, IGPlus_HitStatDeadHits;
+var int IGPlus_ClientHitVerdict;    // client: the last shot's, until its move takes it. Server: the running move's. 0: none
+var float IGPlus_ClientHitPlayedTS; // client: when our own trace last hit a player. 0: none waiting for the server's message
+var int IGPlus_HitStatShots, IGPlus_HitStatBoth, IGPlus_HitStatClientOnly, IGPlus_HitStatServerOnly, IGPlus_HitStatHeadDiff;
+// The eye height a deterministic hitscan shot starts at (ST_SuperShockRifle,
+// ST_SniperRifle). Each side works out EyeHeight on its own: the server once
+// a tick and never with view shake, the client once a frame. A sniper hit
+// drops the client's camera about 15 units for a moment, and the server then
+// fired from above the crosshair's line. So the client's eye height rides the
+// shot's move in half units, and both sides trace from that one number. The
+// server takes it only within IGPLUS_EYE_MAX_DIFF of its own (one step
+// height: more than shake and smoothing make, little for a client that lies).
+const IGPLUS_EYE_MAX_DIFF = 24.0;
+var int IGPlus_ShotEyeByte;       // client: the last shot's, until its move takes it. Server: the running move's. 0: none
+var float IGPlus_ShotEyeDiff;     // server: the client's eye minus ours for the shot being run
+var bool IGPlus_bShotEyeRefused;  // server: that shot's eye was too far from ours
+var int IGPlus_HitStatEyeUsed, IGPlus_HitStatEyeRefused;
+var float IGPlus_HitStatEyeDiffSum, IGPlus_HitStatEyeDiffMax;
 var bool IGPlus_bDetStatLogged;
 var bool IGPlus_bDetTradeLogged; // dead: this death's Traded! line is written
 // Server: the translocate count the move being run carries (the client's,
@@ -582,7 +613,8 @@ var IGPlus_WeaponImplementationBase IGPlus_WImpBase;
 	const IGPLUS_DetWEAPON_FlakCannon = 3;
 	const IGPLUS_DetWEAPON_BioRifle = 4;
 	const IGPLUS_DetWEAPON_Eightball = 5;
-	const IGPLUS_DetWEAPON_SniperRifle = 6; // wire format caps indices at 7 (3 bits)
+	const IGPLUS_DetWEAPON_SniperRifle = 6;
+	const IGPLUS_DetWEAPON_SuperShockRifle = 7; // wire format caps indices at 7 (3 bits)
 
 	// Predicted self-knockback: what pushed us. Splashes are recomputed from
 	// where we are when they land, the hammer's push is direct.
@@ -658,6 +690,11 @@ var bool IGPlus_ServerSettingsMenuCanEdit;
 var Object IGPlus_WeaponSettingsHelper;
 var WeaponSettings IGPlus_WeaponSettingsMenuData;
 var bool IGPlus_WeaponSettingsMenuLoaded;
+// The ini sections this match's server and weapon settings come from, for
+// the settings menu's headers.
+var string IGPlus_ServerSettingsName;
+var string IGPlus_WeaponSettingsName;
+var byte IGPlus_WeaponSettingsMode; // 0 every weapon, 1 NextIG, 2 NextSA: what the menu's Weapon tab shows
 var bool IGPlus_WeaponSettingsMenuCanEdit;
 
 struct IGPlus_WarpFix {
@@ -712,6 +749,23 @@ var vector IGPlus_LocationOffsetFix_SafeLocation;
 var IGPlus_CollisionDummy IGPlus_LocationOffsetFix_CollisionDummy;
 var vector IGPlus_LocationOffsetFix_ServerLocation;
 var float IGPlus_LocationOffsetFix_ServerLocationTime;
+// The velocity that came with that update, and the update before it (what
+// the last frame showed while this frame's update is already in).
+var vector IGPlus_LocationOffsetFix_ServerVelocity;
+var vector IGPlus_LocationOffsetFix_PrevServerLocation;
+var vector IGPlus_LocationOffsetFix_PrevServerVelocity;
+var float IGPlus_LocationOffsetFix_PrevServerLocationTime;
+// The server tick our client knew when each of the two arrived (IGPlus_PRTServerTick).
+var int IGPlus_LocationOffsetFix_ServerLocationTick;
+var int IGPlus_LocationOffsetFix_PrevServerLocationTick;
+// Client, on another player's pawn: moved for our own trace (IGPlus_PRTRulePlace).
+var bool IGPlus_bPRTRulePlaced;
+var vector IGPlus_PRTRuleSavedLoc;
+// What the last placement used, for the shooter's "Own trace" debug line.
+var bool IGPlus_bPRTRuleDbgValid, IGPlus_bPRTRuleDbgPrev;
+var vector IGPlus_PRTRuleDbgLoc, IGPlus_PRTRuleDbgVel;
+var float IGPlus_PRTRuleDbgAge;
+var int IGPlus_PRTRuleDbgLag;
 var bool IGPlus_LocationOffsetFix_DrawServerLocation;
 var Actor IGPlus_LocationOffsetFix_DrawDummy;
 var IGPlus_CollisionDummy IGPlus_LocationOffsetFix_DummyList;
@@ -845,6 +899,9 @@ replication
 		HUDInfo,
 		IGPlus_AlwaysRenderDroppedFlags,
 		IGPlus_AlwaysRenderFlagCarrier,
+		IGPlus_ServerSettingsName,
+		IGPlus_WeaponSettingsName,
+		IGPlus_WeaponSettingsMode,
 		IGPlus_EnableInputReplication,
 		IGPlus_EnableWarpFix,
 		IGPlus_WarpFixDelay,
@@ -867,7 +924,6 @@ replication
 		zzbIsWarmingUp,
 		zzCVDelay,
 		zzCVDeny,
-		zzForceSettingsLevel,
 		zzMaximumNetspeed,
 		zzMinimumNetspeed,
 		zzTrackFOV,
@@ -1765,9 +1821,12 @@ event Possess()
 		IGPlus_DetTranslocator = zzUTPure.Settings.DeterministicTranslocatorActive();
 		IGPlus_PredictedDiscBoost = zzUTPure.Settings.bEnablePredictedDiscBoost;
 		IGPlus_EnableInputReplication = zzUTPure.Settings.bEnableInputReplication;
+		IGPlus_ServerSettingsName = string(zzUTPure.Settings.Name);
+		IGPlus_WeaponSettingsName = zzUTPure.IGPlus_WeaponSettingsName();
+		IGPlus_WeaponSettingsMode = zzUTPure.IGPlus_WeaponSettingsMode();
 		IGPlus_EnableSnapshotInterpolation = zzUTPure.Settings.bEnableSnapshotInterpolation;
 
-		ShowDamageNumberMode = int(zzUTPure.Settings.ShowDamageNumberMode);
+		ShowDamageNumberMode = zzUTPure.IGPlus_DamageNumberMode();
 
 		if(!zzUTPure.bExludeKickers)
 		{
@@ -4901,13 +4960,22 @@ function IGPlus_EventLog(string S) {
 // the 16uu bubble (nobody saw them), late the actions that came through the
 // resend or were held back, jumpDropped the jumps at a landing that only the
 // server took. Weapons: see IGPlus_StatShotRefused, whose single lines are
-// written only while TraceInput is on. Not for a player with all at zero.
+// written only while TraceInput is on. Hits: shots that carried the client's
+// own verdict, those both traces counted as a hit, those only the client's
+// did (it played a hit sound for nothing) and only the server's did (the
+// sound came a ping late), see IGPlus_HitCompare. Not for a player with all
+// at zero.
 function IGPlus_DetLogSummary() {
+	local float EyeAvg;
+
 	if (IGPlus_bDetStatLogged || PlayerReplicationInfo == None)
 		return;
 	if (IGPlus_DetStatThrows + IGPlus_DetStatRejects + IGPlus_StatShotRefused + IGPlus_StatShotUnbound
-		+ IGPlus_StatSwitchMismatch + IGPlus_StatClockHolds == 0)
+		+ IGPlus_StatSwitchMismatch + IGPlus_StatClockHolds + IGPlus_HitStatShots
+		+ IGPlus_HitStatEyeUsed + IGPlus_HitStatEyeRefused + IGPlus_HitStatDeadShots == 0)
 		return;
+	if (IGPlus_HitStatEyeUsed > 0)
+		EyeAvg = IGPlus_HitStatEyeDiffSum / IGPlus_HitStatEyeUsed;
 	IGPlus_bDetStatLogged = true;
 	IGPlus_EventLog("[DET-SUMMARY]"@PlayerReplicationInfo.PlayerName
 		@"throws="$IGPlus_DetStatThrows@"translocates="$IGPlus_DetStatTlocs
@@ -4916,6 +4984,13 @@ function IGPlus_DetLogSummary() {
 		@"jumpDropped="$IGPlus_DetStatJumpDropped
 		@"shotRefused="$IGPlus_StatShotRefused@"shotUnbound="$IGPlus_StatShotUnbound
 		@"switchMismatch="$IGPlus_StatSwitchMismatch@"clockHolds="$IGPlus_StatClockHolds
+		@"hitShots="$IGPlus_HitStatShots@"hitBoth="$IGPlus_HitStatBoth
+		@"hitClientOnly="$IGPlus_HitStatClientOnly@"hitServerOnly="$IGPlus_HitStatServerOnly
+		@"hitHeadDiff="$IGPlus_HitStatHeadDiff
+		@"hitDrawnDiff="$IGPlus_HitStatDrawnDiff@"hitDrawnRight="$IGPlus_HitStatDrawnRight
+		@"deadShots="$IGPlus_HitStatDeadShots@"deadShotHits="$IGPlus_HitStatDeadHits
+		@"eyeUsed="$IGPlus_HitStatEyeUsed@"eyeRefused="$IGPlus_HitStatEyeRefused
+		@"eyeDiffAvg="$EyeAvg@"eyeDiffMax="$IGPlus_HitStatEyeDiffMax
 		@"ping="$PlayerReplicationInfo.Ping@"lostMoves="$IGPlus_DetLostMoves);
 }
 
@@ -5522,7 +5597,16 @@ function IGPlus_ApplyServerMove(IGPlus_ServerMove SM) {
 		if (ST_ShockRifle(DetWeapon) != none) {
 			IGPlus_DetOwnBeamMode = SM.DetChargeData & 3;
 			IGPlus_OwnBallVerdict = (SM.DetChargeData >> 2) & 3;
+		} else if (SM.DetChargeData >= IGPLUS_HIT_MISS && (SM.DetChargeData & 3) != 3
+			&& (ST_SuperShockRifle(DetWeapon) != none || ST_SniperRifle(DetWeapon) != none)) {
+			// The client's verdict on this shot (IGPlus_HitCompare), and
+			// whether its drawn bodies said the opposite.
+			IGPlus_ClientHitVerdict = SM.DetChargeData & 11;
+			IGPlus_bShotDrawnDiffers = (SM.DetChargeData & IGPLUS_HIT_DRAWNDIFF) != 0;
 		}
+		// The eye height the client traced this move's shot from.
+		if (ST_SuperShockRifle(DetWeapon) != none || ST_SniperRifle(DetWeapon) != none)
+			IGPlus_ShotEyeByte = SM.ShotEye;
 		IGPlus_DetProcessStep(
 			DetWeapon,
 			SM.TimeStamp,
@@ -5540,6 +5624,9 @@ function IGPlus_ApplyServerMove(IGPlus_ServerMove SM) {
 		);
 		IGPlus_DetOwnBeamMode = 0;
 		IGPlus_OwnBallVerdict = 0;
+		IGPlus_ClientHitVerdict = 0;
+		IGPlus_bShotDrawnDiffers = false;
+		IGPlus_ShotEyeByte = 0;
 		// Deterministic weapons execute shots directly from step processing.
 		// Keep fire latches cleared to avoid legacy state-machine refire.
 		bFire = 0;
@@ -5975,7 +6062,8 @@ function xxServerMove(
 	SM.bDetReady = (MoveDeltaTime & 0x01) != 0;
 	SM.DetWeaponIndex = (MoveDeltaTime & 0x0E) >> 1;
 	SM.DetChargeData = (MoveDeltaTime & 0xF0) >> 4;
-	SM.MoveDeltaTime = (MoveDeltaTime >>> 8) * 0.0000152587890625;
+	SM.MoveDeltaTime = IGPlus_UnpackDelta(MoveDeltaTime);
+	SM.ShotEye = MoveDeltaTime >>> 24;
 	SM.ClientAcceleration = Accel * 0.1;
 	SM.ClientLocation.X = ClientLocX;
 	SM.ClientLocation.Y = ClientLocY;
@@ -6231,6 +6319,534 @@ function bool xxCloseEnough(vector HitLoc, optional int HitRadius)
 
 	return false;
 
+}
+
+// Eye height in half units: 1 to 255 for -47.5 to 79.5. 0 means none.
+static function int IGPlus_EyePack(float Eye) {
+	return Clamp(int((Eye + 48.0) * 2.0 + 0.5), 1, 255);
+}
+
+static function float IGPlus_EyeUnpack(int B) {
+	return 0.5 * (B & 0xFF) - 48.0;
+}
+
+// A move's time and its shot's eye height in one int, above the low byte
+// (bDetReady, DetWeaponIndex, DetChargeData). The time has 16 bits of
+// 1/65536 s: the engine never runs a frame longer than 0.4 s.
+static function int IGPlus_PackDeltaEye(float Delta, int EyeByte) {
+	return (Clamp(int(Delta * 65536), 0, 0xFFFF) << 8) | ((EyeByte & 0xFF) << 24);
+}
+
+static function float IGPlus_UnpackDelta(int Packed) {
+	return ((Packed >>> 8) & 0xFFFF) * 0.0000152587890625;
+}
+
+// Client: the eye height this shot is traced from, as the server will get it,
+// noted for the shot's move.
+simulated function float IGPlus_ClientShotEye() {
+	IGPlus_ShotEyeByte = IGPlus_EyePack(EyeHeight);
+	return IGPlus_EyeUnpack(IGPlus_ShotEyeByte);
+}
+
+// Server: the eye height of the deterministic shot being run. The client's,
+// where its move brought one and it is close enough to ours.
+function float IGPlus_ServerShotEye() {
+	local float Eye, Diff;
+
+	IGPlus_ShotEyeDiff = 0.0;
+	IGPlus_bShotEyeRefused = false;
+	if (IGPlus_ShotEyeByte == 0)
+		return EyeHeight;
+	Eye = IGPlus_EyeUnpack(IGPlus_ShotEyeByte);
+	IGPlus_ShotEyeDiff = Eye - EyeHeight;
+	Diff = Abs(IGPlus_ShotEyeDiff);
+	if (Diff > IGPLUS_EYE_MAX_DIFF) {
+		IGPlus_bShotEyeRefused = true;
+		IGPlus_HitStatEyeRefused++;
+		return EyeHeight;
+	}
+	IGPlus_HitStatEyeUsed++;
+	IGPlus_HitStatEyeDiffSum += Diff;
+	IGPlus_HitStatEyeDiffMax = FMax(IGPlus_HitStatEyeDiffMax, Diff);
+	return Eye;
+}
+
+// Where the server stands a player for a Precise Rewind Time shot: at the
+// update the shooter's screen showed, carried on by that update's velocity
+// for as long as the screen was past it (UTPlusDummy.CompSwap, and
+// IGPlus_PRTRuleAge for that time on the client). Held at the update where
+// warp fix holds a stalled player.
+static function vector IGPlus_PRTRulePos(vector Loc, vector Vel, float Age, bool bHold) {
+	if (bHold)
+		return Loc;
+	return Loc + Vel * FClamp(Age, -0.2, 0.2);
+}
+
+// How long a player's update has to be carried on to stand where the server
+// stands them. The server carries its snapshot of the shown tick for
+// ShownAge. Our update of this player is that snapshot when both arrived in
+// one frame, and then the two times are the same. A player's update and the
+// tick counter do not always arrive together: the counter can be a tick ahead
+// of the update we have, or behind it. The player has moved on in that tick,
+// so the update is carried for its own time (first match test, Nov 13 2026:
+// carried for ShownAge, the trace was a tick's movement off on 15 of 1111
+// shots, where the drawn bodies were right). Two ticks or more with no update
+// while the counter went on means the server has the player still at that
+// update (stalled, or standing): then it is ShownAge.
+static function float IGPlus_PRTRuleAge(float ShownTime, float UpdateTime, int ShownTick, int UpdateTick, float ShownAge) {
+	local float Age;
+
+	Age = FMax(0.0, ShownTime - UpdateTime);
+	if (ShownTick - UpdateTick >= 2)
+		Age = FMin(Age, ShownAge);
+	return Age;
+}
+
+// Client, on another player's pawn: stand it there for our own trace. Called
+// with the pawn where the last frame drew it (IGPlus_LocationOffsetFix_RestoreAll).
+// Not on a lift (the server lines riders up with the lift) and not before the
+// first update.
+simulated function IGPlus_PRTRulePlace(float ShownTime, int ShownTick, float ShownAge, bool bWarpFix, float WarpFixDelay) {
+	local vector Loc, Vel;
+	local float UpdateTime, Age;
+	local int UpdateTick;
+
+	IGPlus_bPRTRulePlaced = false;
+	IGPlus_bPRTRuleDbgValid = false;
+	IGPlus_bPRTRuleDbgPrev = false;
+	if (IGPlus_LocationOffsetFix_ServerLocationTime <= 0.0 || bHidden || Health <= 0
+		|| IGPlus_LocationOffsetFix_WasOnMover || IGPlus_LocationOffsetFix_IsOnMover())
+		return;
+	Loc = IGPlus_LocationOffsetFix_ServerLocation;
+	Vel = IGPlus_LocationOffsetFix_ServerVelocity;
+	UpdateTime = IGPlus_LocationOffsetFix_ServerLocationTime;
+	UpdateTick = IGPlus_LocationOffsetFix_ServerLocationTick;
+	// This frame's update is in already: the last frame showed the one before.
+	if (UpdateTime == Level.TimeSeconds) {
+		if (IGPlus_LocationOffsetFix_PrevServerLocationTime <= 0.0)
+			return;
+		Loc = IGPlus_LocationOffsetFix_PrevServerLocation;
+		Vel = IGPlus_LocationOffsetFix_PrevServerVelocity;
+		UpdateTime = IGPlus_LocationOffsetFix_PrevServerLocationTime;
+		UpdateTick = IGPlus_LocationOffsetFix_PrevServerLocationTick;
+		IGPlus_bPRTRuleDbgPrev = true;
+	}
+	Age = IGPlus_PRTRuleAge(ShownTime, UpdateTime, ShownTick, UpdateTick, ShownAge);
+	IGPlus_PRTRuleSavedLoc = Location;
+	IGPlus_PRTRuleDbgLoc = IGPlus_PRTRulePos(Loc, Vel, Age, bWarpFix && Age > WarpFixDelay);
+	IGPlus_PRTRuleDbgVel = Vel;
+	IGPlus_PRTRuleDbgAge = Age;
+	IGPlus_PRTRuleDbgLag = ShownTick - UpdateTick;
+	IGPlus_bPRTRuleDbgValid = true;
+	bCollideWorld = false;
+	SetLocation(IGPlus_PRTRuleDbgLoc);
+	bCollideWorld = true;
+	IGPlus_bPRTRulePlaced = true;
+}
+
+simulated function IGPlus_PRTRuleUndo() {
+	if (IGPlus_bPRTRulePlaced == false)
+		return;
+	IGPlus_bPRTRulePlaced = false;
+	bCollideWorld = false;
+	SetLocation(IGPlus_PRTRuleSavedLoc);
+	bCollideWorld = true;
+}
+
+// Client: does the server place players by our Precise Rewind Time report
+// for the shot we are about to trace? The same conditions as the report
+// itself (xxReplicateMove, SendSavedMove).
+function bool IGPlus_PRTRuleUsable() {
+	local WeaponSettingsRepl WS;
+
+	WS = GetWeaponSettings();
+	return WS != None && WS.bEnablePingCompensation && WS.bEnablePreciseRewindTime
+		&& IGPlus_EnableSnapshotInterpolation == false && IGPlus_EnableInputReplication == false
+		&& Settings != None && Settings.bEnableLocationOffsetFix
+		&& IGPlus_PRTSeenAt > 0 && IGPlus_PRTShownTick != 0;
+}
+
+function IGPlus_PRTRuleAll(bool bPlace) {
+	local int i;
+	local PlayerReplicationInfo PRI;
+	local bbPlayer P;
+
+	if (GameReplicationInfo == None)
+		return;
+	for (i = 0; i < arraycount(GameReplicationInfo.PRIArray); ++i) {
+		PRI = GameReplicationInfo.PRIArray[i];
+		if (PRI == None) break;
+		P = bbPlayer(PRI.Owner);
+		if (P == None || P.Role != ROLE_SimulatedProxy) continue;
+		if (bPlace)
+			P.IGPlus_PRTRulePlace(IGPlus_PRTShownTime, IGPlus_PRTShownTick, IGPlus_PRTShownAge,
+				IGPlus_EnableWarpFix, IGPlus_WarpFixDelay);
+		else
+			P.IGPlus_PRTRuleUndo();
+	}
+}
+
+// One decimal, for log lines.
+static function string IGPlus_Fmt1(float F) {
+	local int T;
+	local string S;
+
+	T = int(Abs(F) * 10.0 + 0.5);
+	S = (T / 10)$"."$(T - (T / 10) * 10);
+	if (F < 0 && T != 0)
+		return "-"$S;
+	return S;
+}
+
+static function string IGPlus_FmtVec1(vector V) {
+	return IGPlus_Fmt1(V.X)$","$IGPlus_Fmt1(V.Y)$","$IGPlus_Fmt1(V.Z);
+}
+
+// How far a line passes a standing cylinder: what is missing to its side and
+// to its top or bottom, at the line's closest point to the centre.
+static function float IGPlus_LineCylinderGap(vector Start, vector Dir, vector Loc, float Radius, float Height) {
+	local vector Closest;
+
+	Closest = Start + Dir * FMax(0.0, (Loc - Start) dot Dir);
+	return FMax(0.0, VSize((Closest - Loc) * vect(1,1,0)) - Radius) + FMax(0.0, Abs(Closest.Z - Loc.Z) - Height);
+}
+
+// Client, enableDebugData 1: one "Own trace" line a shot, for the player the
+// trace hit or passed closest. It says what the trace against the server's
+// placement said, what the one against the drawn bodies said, and what the
+// placement was made of: how old that player's update was (updAge), how many
+// ticks it was behind the tick counter (tickLag), whether the update before
+// the newest one was used (prev), how much that player's velocity changed
+// between the last two updates (velChange), the smoothing offset of the
+// drawn body (smooth), and both spots. The server's [DET-HIT] line for the
+// same shot has its own spot (srvLoc), so the three can be laid side by side.
+// Called with the others where the last frame drew them.
+function IGPlus_ClientShotTraceDebug(Actor Other, Actor Drawn, bool bRule, vector StartTrace, vector EndTrace) {
+	local int i;
+	local PlayerReplicationInfo PRI;
+	local bbPlayer P, Best;
+	local vector Dir;
+	local float Gap, RuleGap, BestGap, BestRuleGap;
+	local string S;
+
+	Dir = Normal(EndTrace - StartTrace);
+	Best = bbPlayer(Other);
+	if (Best == None)
+		Best = bbPlayer(Drawn);
+	if (GameReplicationInfo != None) {
+		for (i = 0; i < arraycount(GameReplicationInfo.PRIArray); ++i) {
+			PRI = GameReplicationInfo.PRIArray[i];
+			if (PRI == None) break;
+			P = bbPlayer(PRI.Owner);
+			if (P == None || P.Role != ROLE_SimulatedProxy || P.bHidden || PRI.bIsSpectator) continue;
+			if (bbPlayer(Other) != None || bbPlayer(Drawn) != None) {
+				if (P != Best) continue;
+			}
+			Gap = IGPlus_LineCylinderGap(StartTrace, Dir, P.Location, P.CollisionRadius, P.CollisionHeight);
+			RuleGap = Gap;
+			if (bRule && P.IGPlus_bPRTRuleDbgValid)
+				RuleGap = IGPlus_LineCylinderGap(StartTrace, Dir, P.IGPlus_PRTRuleDbgLoc, P.CollisionRadius, P.CollisionHeight);
+			if (P == Best || Best == None || FMin(Gap, RuleGap) < FMin(BestGap, BestRuleGap)) {
+				Best = P;
+				BestGap = Gap;
+				BestRuleGap = RuleGap;
+			}
+		}
+	}
+
+	if (bRule)
+		S = "rule="$(Pawn(Other) != None)@"drawn="$(Pawn(Drawn) != None);
+	else if (Settings != None && Settings.bEnableLocationOffsetFix == false)
+		S = "rule=off(LocationOffsetFix off) drawn="$(Pawn(Other) != None);
+	else
+		S = "rule=off drawn="$(Pawn(Other) != None);
+	if (Best == None || Best.PlayerReplicationInfo == None || (Pawn(Other) == None && Pawn(Drawn) == None && FMin(BestGap, BestRuleGap) > 150.0)) {
+		ClientDebugMessage("Own trace:"@S@"target=none");
+		return;
+	}
+	S = S@"target="$Best.PlayerReplicationInfo.PlayerName@"drawnGap="$IGPlus_Fmt1(BestGap)@"drawnLoc="$IGPlus_FmtVec1(Best.Location);
+	if (bRule && Best.IGPlus_bPRTRuleDbgValid)
+		S = S@"ruleGap="$IGPlus_Fmt1(BestRuleGap)@"ruleLoc="$IGPlus_FmtVec1(Best.IGPlus_PRTRuleDbgLoc)
+			@"apart="$IGPlus_Fmt1(VSize(Best.IGPlus_PRTRuleDbgLoc - Best.Location))
+			@"updAge="$IGPlus_Fmt1(1000.0 * Best.IGPlus_PRTRuleDbgAge)@"tickLag="$Best.IGPlus_PRTRuleDbgLag
+			@"prev="$Best.IGPlus_bPRTRuleDbgPrev@"vel="$IGPlus_FmtVec1(Best.IGPlus_PRTRuleDbgVel)
+			@"velChange="$int(VSize(Best.IGPlus_LocationOffsetFix_ServerVelocity - Best.IGPlus_LocationOffsetFix_PrevServerVelocity))
+			@"smooth="$IGPlus_Fmt1(VSize(Best.IGPlus_LocationOffsetFix_PredictionOffset));
+	else if (bRule)
+		S = S@"notPlaced";
+	S = S@"shownAge="$IGPlus_Fmt1(1000.0 * IGPlus_PRTShownAge)@"shownTick="$(IGPlus_PRTShownTick & 0x7FFF);
+	ClientDebugMessage("Own trace:"@S);
+}
+
+function Actor IGPlus_ClientShotTraceOnce(
+	out vector HitLocation, out vector HitNormal, vector EndTrace, vector StartTrace, IGPlus_WeaponImplementationBase WB
+) {
+	if (WB != None)
+		return WB.TraceShotClient(HitLocation, HitNormal, EndTrace, StartTrace, self);
+	return NN_TraceShot(HitLocation, HitNormal, EndTrace, StartTrace, self);
+}
+
+// Client: our own trace of a deterministic hitscan shot. WB is set where the
+// server's reduced hitbox setting is on. HitOffset is the hit point on the
+// body that was hit, IGPlus_bShotHead whether that was the head.
+//
+// The trace tests the other players where the server will test them, not
+// where the screen draws them. The screen draws a player at the last update
+// carried on by its velocity, plus a smoothing offset that fades after the
+// player changes direction. The server has no such offset, so a trace against
+// the drawn bodies said hit for shots the server counts as a miss, a few
+// units off the edge. Nothing here decides a hit: the server's trace does.
+// With Precise Rewind Time not in use the server's spot can't be worked out
+// here, and the drawn bodies are tested as before.
+//
+// Where the two differ on whether a player was hit, IGPlus_bShotDrawnDiffers
+// says so and the server counts it (hitDrawnDiff).
+function Actor IGPlus_ClientShotTrace(
+	out vector HitLocation, out vector HitNormal, out vector HitOffset,
+	vector EndTrace, vector StartTrace, IGPlus_WeaponImplementationBase WB
+) {
+	local Actor Other, Drawn;
+	local vector DrawnLoc, DrawnNormal;
+	local bool bRule;
+
+	IGPlus_bShotDrawnDiffers = false;
+	IGPlus_bShotHead = false;
+	bRule = IGPlus_PRTRuleUsable();
+
+	IGPlus_LocationOffsetFix_RestoreAll();
+	if (bRule) {
+		// First against the bodies as drawn, for the count only.
+		Drawn = IGPlus_ClientShotTraceOnce(DrawnLoc, DrawnNormal, EndTrace, StartTrace, WB);
+		IGPlus_PRTRuleAll(true);
+	}
+	Other = IGPlus_ClientShotTraceOnce(HitLocation, HitNormal, EndTrace, StartTrace, WB);
+	if (Other != None)
+		HitOffset = HitLocation - Other.Location;
+	if (Pawn(Other) != None) {
+		if (WB != None)
+			IGPlus_bShotHead = WB.CheckHeadShot(Pawn(Other), HitLocation, Normal(EndTrace - StartTrace));
+		else
+			IGPlus_bShotHead = HitOffset.Z > 0.62 * Other.CollisionHeight;
+	}
+	if (bRule) {
+		IGPlus_PRTRuleAll(false);
+		IGPlus_bShotDrawnDiffers = (Pawn(Drawn) != None) != (Pawn(Other) != None);
+	}
+	if (bDrawDebugData)
+		IGPlus_ClientShotTraceDebug(Other, Drawn, bRule, StartTrace, EndTrace);
+	IGPlus_LocationOffsetFix_UndoRestoreAll();
+	return Other;
+}
+
+// Client: our own trace of a deterministic hitscan shot (ST_SuperShockRifle,
+// SA_SniperRifle). A hit on a player plays the hit sound and marker now, where
+// the player's Hit Source is Client, and the verdict goes into the shot's move
+// for the server to compare (IGPlus_HitCompare).
+simulated function IGPlus_ClientShotVerdict(Actor Other, float Damage, name DamageType, bool bHead) {
+	local Pawn Victim;
+
+	Victim = Pawn(Other);
+	if (Victim == None || Victim.PlayerReplicationInfo == None || PlayerReplicationInfo == None) {
+		IGPlus_ClientHitVerdict = IGPLUS_HIT_MISS;
+		if (IGPlus_bShotDrawnDiffers)
+			IGPlus_ClientHitVerdict += IGPLUS_HIT_DRAWNDIFF;
+		IGPlus_ClientHitPlayedTS = 0.0;
+		return;
+	}
+	if (bHead)
+		IGPlus_ClientHitVerdict = IGPLUS_HIT_HEAD;
+	else
+		IGPlus_ClientHitVerdict = IGPLUS_HIT_BODY;
+	if (IGPlus_bShotDrawnDiffers)
+		IGPlus_ClientHitVerdict += IGPLUS_HIT_DRAWNDIFF;
+	IGPlus_ClientHitPlayedTS = Level.TimeSeconds;
+	class'bbPlayerStatics'.static.PlayClientHitResponse(self, Victim, Damage, DamageType);
+}
+
+// Client: the server's hit message is here (IGPlus_HitFeedbackMessage). Did
+// our own trace already play this hit? One shot, one message: these weapons
+// fire slower than a ping.
+// ponytail: one time stamp. A weapon that fires faster than the ping, or one
+// carried next to other weapons, needs a shot id in the message.
+simulated function bool IGPlus_TakeClientHit() {
+	if (IGPlus_ClientHitPlayedTS <= 0.0 || Level.TimeSeconds - IGPlus_ClientHitPlayedTS > 0.6)
+		return false;
+	IGPlus_ClientHitPlayedTS = 0.0;
+	return true;
+}
+
+// Server: this deterministic shot's trace against what the shooter's own
+// trace said (IGPlus_ClientHitVerdict, from the shot's move). Called before
+// the damage. Nothing is decided here: the server's trace stands. A
+// difference is counted, and gets one [DET-HIT] line. For a hit only the
+// client saw, the line names the nearest rewound body and what the server's
+// line was missing to its cylinder (gapXY, gapZ). blocked=True is a body
+// behind something solid.
+function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, vector HitLocation) {
+	local bool bServerHit, bClientHit, bDrawnHit, bBlocked, bBestBlocked;
+	local Pawn P, Best;
+	local UTPlusDummy D;
+	local vector Loc, Closest;
+	local float Reach, T, GapXY, GapZ, BestXY, BestZ, BestT;
+	local IGPlus_WeaponImplementationBase WB;
+	local string S;
+
+	if (IGPlus_ClientHitVerdict == 0)
+		return; // the client made no trace for this shot
+	bServerHit = Pawn(Other) != None && Pawn(Other).PlayerReplicationInfo != None;
+	bClientHit = IGPlus_ClientHitVerdict != IGPLUS_HIT_MISS;
+	// The client's trace against the bodies as its screen drew them. The
+	// verdict is from the trace on our own rule (IGPlus_ClientShotTrace).
+	bDrawnHit = bClientHit != IGPlus_bShotDrawnDiffers;
+	IGPlus_HitStatShots++;
+	if (IGPlus_bShotDrawnDiffers) {
+		IGPlus_HitStatDrawnDiff++;
+		if (bDrawnHit == bServerHit)
+			IGPlus_HitStatDrawnRight++;
+	}
+	if (bServerHit == bClientHit) {
+		if (bServerHit) {
+			IGPlus_HitStatBoth++;
+			if (bHead != (IGPlus_ClientHitVerdict == IGPLUS_HIT_HEAD))
+				IGPlus_HitStatHeadDiff++;
+		}
+		if (IGPlus_bShotDrawnDiffers == false)
+			return;
+	} else if (bServerHit) {
+		IGPlus_HitStatServerOnly++;
+	} else {
+		IGPlus_HitStatClientOnly++;
+	}
+
+	Reach = VSize(HitLocation - Start);
+	if (bServerHit) {
+		Best = Pawn(Other);
+		BestT = Reach;
+	} else {
+		for (P = Level.PawnList; P != None; P = P.NextPawn) {
+			if (P == self || P.PlayerReplicationInfo == None || P.PlayerReplicationInfo.bIsSpectator
+				|| P.Health <= 0 || P.bHidden)
+				continue;
+			Loc = P.Location;
+			if (zzUTPure != None)
+				D = zzUTPure.FindDummy(P);
+			else
+				D = None;
+			if (D != None)
+				Loc = D.Location;
+			T = FMax(0.0, (Loc - Start) dot Dir);
+			bBlocked = T > Reach + P.CollisionRadius;
+			Closest = Start + Dir * T;
+			GapXY = FMax(0.0, VSize((Closest - Loc) * vect(1,1,0)) - P.CollisionRadius);
+			GapZ = FMax(0.0, Abs(Closest.Z - Loc.Z) - P.CollisionHeight);
+			if (Best == None || GapXY + GapZ < BestXY + BestZ) {
+				Best = P;
+				BestXY = GapXY;
+				BestZ = GapZ;
+				BestT = T;
+				bBestBlocked = bBlocked;
+			}
+		}
+	}
+
+	// drawnOnly: only the drawn bodies said hit, so the old trace would have
+	// played a hit sound for nothing. drawnMissed: only they said miss.
+	if (bServerHit == bClientHit) {
+		if (bDrawnHit)
+			S = "drawnOnly";
+		else
+			S = "drawnMissed";
+	} else if (bServerHit)
+		S = "serverOnly";
+	else
+		S = "clientOnly";
+	S = S@"drawnHit="$bDrawnHit;
+	if (Weapon != None)
+		S = S@"weapon="$Weapon.Class.Name;
+	if (Best != None && Best.PlayerReplicationInfo != None) {
+		S = S@"nearest="$Best.PlayerReplicationInfo.PlayerName@"dist="$int(BestT)@"speed="$int(VSize(Best.Velocity));
+		if (bServerHit == false)
+			S = S@"gapXY="$BestXY@"gapZ="$BestZ@"blocked="$bBestBlocked;
+		// Where we stood that player for this shot, to lay beside the
+		// shooter's "Own trace" line (ruleLoc, drawnLoc).
+		D = None;
+		if (zzUTPure != None)
+			D = zzUTPure.FindDummy(Best);
+		if (D != None)
+			S = S@"srvLoc="$IGPlus_FmtVec1(D.Location)@"srvVel="$IGPlus_FmtVec1(D.Velocity);
+		if (IGPlus_PRTUsable())
+			S = S@"srvAge="$IGPlus_Fmt1(1000.0 * (IGPlus_PRTViewTimeNow() - IGPlus_PRTSeenTime));
+	}
+	WB = IGPlus_GetWeaponImplementationBase();
+	if (WB != None)
+		S = S@"rewindMs="$int(WB.IGPlus_GetHitscanRewindMs(self))@"prt="$IGPlus_PRTUsable();
+	// The client's eye height minus ours for this shot, and whether we used it.
+	S = S@"eyeDiff="$IGPlus_ShotEyeDiff;
+	if (IGPlus_bShotEyeRefused)
+		S = S@"eyeRefused";
+	S = S@"ping="$PlayerReplicationInfo.Ping;
+	IGPlus_EventLog("[DET-HIT]"@PlayerReplicationInfo.PlayerName@S);
+	// The shooter's own line (enableDebugData 1).
+	if (bDrawDebugData)
+		ClientDebugMessage("Hit check (server):"@S);
+}
+
+// Server, dead: a move we take no shot from. Its client fired the rifle or
+// the sniper on it (the move carries that shot's verdict), with its beam and,
+// where its own trace hit, its hit sound. No trace is wrong here: the shooter
+// was dead first and the shot does not trade. Counted (deadShots,
+// deadShotHits), with one [DET-HIT] line and a line for the shooter.
+function IGPlus_NoteDeadShot(int MoveDeltaTime) {
+	local int Verdict, WeaponIndex;
+	local string S;
+
+	Verdict = (MoveDeltaTime & 0xF0) >> 4;
+	WeaponIndex = (MoveDeltaTime & 0x0E) >> 1;
+	if (Verdict < IGPLUS_HIT_MISS || (Verdict & 3) == 3
+		|| (WeaponIndex != IGPLUS_DetWEAPON_SuperShockRifle && WeaponIndex != IGPLUS_DetWEAPON_SniperRifle))
+		return;
+	IGPlus_HitStatDeadShots++;
+	if ((Verdict & 3) != 0)
+		IGPlus_HitStatDeadHits++;
+	S = "deadShot clientHit="$((Verdict & 3) != 0)@"deadFor="$RealTimeDead@"trades="$IGPlus_DetTradesEnabled()
+		@"ping="$PlayerReplicationInfo.Ping;
+	IGPlus_EventLog("[DET-HIT]"@PlayerReplicationInfo.PlayerName@S);
+	if (bDrawDebugData)
+		ClientDebugMessage("Hit check (server):"@S);
+}
+
+// Do the deterministic weapons trade here? NextIG and NextSA have their own
+// switch in the weapon settings (bEnableTrades, off by default: InstaGib and
+// Sniper Arena are played without trades). Everywhere else the server setting
+// decides (bEnableAllWeaponTrades).
+function bool IGPlus_DetTradesEnabled() {
+	local WeaponSettingsRepl WS;
+
+	if (IGPlus_WeaponSettingsMode != 0) {
+		WS = GetWeaponSettings();
+		return WS != None && WS.bEnableTrades;
+	}
+	return zzUTPure.Settings.bEnableAllWeaponTrades;
+}
+
+// Client: we carry a weapon that plays its hit sound and marker from our own
+// trace (bbPlayerStatics.PlayClientHitResponse). Only then may the server's be
+// skipped (IGPlus_HitFeedbackMessage). Carried, not held: the server's message
+// comes a ping after the shot, and by then we may hold the translocator.
+simulated function bool IGPlus_HasClientHitResponse() {
+	local Inventory I;
+	local int n;
+
+	for (I = Inventory; I != none && n < 100; I = I.Inventory) {
+		n++;
+		if (NN_SuperShockRifle(I) != none && NN_SuperShockRifle(I).bNewNet)
+			return true;
+		if (NN_ShockRifle(I) != none && NN_ShockRifle(I).bNewNet)
+			return true;
+		if (NN_SniperRifle(I) != none && NN_SniperRifle(I).bNewNet)
+			return true;
+	}
+	return false;
 }
 
 function bool xxWeaponIsNewNet( optional bool bAlt )
@@ -7076,6 +7692,8 @@ function IGPlus_SavedMove xxGetFreeMove() {
 			return IGPLUS_DetWEAPON_Eightball;
 		if (ST_SniperRifle(W) != none)
 			return IGPLUS_DetWEAPON_SniperRifle;
+		if (ST_SuperShockRifle(W) != none)
+			return IGPLUS_DetWEAPON_SuperShockRifle;
 		return IGPLUS_DetWEAPON_None;
 	}
 
@@ -7136,6 +7754,8 @@ function IGPlus_ClientEightballAmmoRefund(ST_UT_Eightball Eightball, int ServerA
 			if (Index == IGPLUS_DetWEAPON_Eightball && ST_UT_Eightball(Inv) != none)
 				return Weapon(Inv);
 			if (Index == IGPLUS_DetWEAPON_SniperRifle && ST_SniperRifle(Inv) != none)
+				return Weapon(Inv);
+			if (Index == IGPLUS_DetWEAPON_SuperShockRifle && ST_SuperShockRifle(Inv) != none)
 				return Weapon(Inv);
 		}
 		return none;
@@ -7224,6 +7844,9 @@ simulated function float IGPlus_DetSelectTimeFor(Weapon W) {
 		return IGPlus_DetEffectiveAnimTime(WS.EightballSelectTime, WS.default.EightballSelectTime);
 	if (ST_SniperRifle(W) != none)
 		return IGPlus_DetEffectiveAnimTime(WS.SniperSelectTime, WS.default.SniperSelectTime);
+	// The instagib rifle plays its select and down anims by the shock settings.
+	if (ST_SuperShockRifle(W) != none)
+		return IGPlus_DetEffectiveAnimTime(WS.ShockSelectTime, WS.default.ShockSelectTime);
 	return IGPlus_DetEntryGateSeconds();
 }
 
@@ -7275,7 +7898,7 @@ function float IGPlus_TradeTimeMargin() {
 // trade (bEnableAllWeaponTrades)? The same rule as the NewNet weapons; the
 // weapons stay ours until DiscardInventory at twice MaxTradeTimeMargin.
 function bool IGPlus_DetTradeAllowed() {
-	if (zzUTPure.Settings.bEnableAllWeaponTrades == false || IGPlus_bDetTradeClosed)
+	if (IGPlus_DetTradesEnabled() == false || IGPlus_bDetTradeClosed)
 		return false;
 	if (zzUTPure.Settings.bRestrictTrading)
 		return RealTimeDead < IGPlus_TradeTimeMargin();
@@ -7320,6 +7943,8 @@ function IGPlus_DetResetWeaponStates() {
 			ST_UT_Eightball(Item).DetResetDeterministicState();
 		else if (ST_SniperRifle(Item) != none)
 			ST_SniperRifle(Item).DetResetDeterministicState();
+		else if (ST_SuperShockRifle(Item) != none)
+			ST_SuperShockRifle(Item).DetResetDeterministicState();
 	}
 }
 
@@ -7597,6 +8222,8 @@ simulated function bool IGPlus_IsDetActiveWeapon(optional Weapon W) {
 	SN = ST_SniperRifle(W);
 	if (SN != none)
 		return SN.IsDetActive();
+	if (ST_SuperShockRifle(W) != none)
+		return ST_SuperShockRifle(W).IsDetActive();
 
 	return false;
 }
@@ -7705,6 +8332,9 @@ simulated function bool IGPlus_DetProcessStep(
 	SN = ST_SniperRifle(W);
 	if (SN != none)
 		return SN.DetProcessStep(StepTS, StepView, StepLoc, bFireHeld, bAltHeld, bForceFire, bForceAlt, bServerSide, bClientPredictedStep);
+
+	if (ST_SuperShockRifle(W) != none)
+		return ST_SuperShockRifle(W).DetProcessStep(StepTS, StepView, StepLoc, bFireHeld, bAltHeld, bForceFire, bForceAlt, bServerSide, bClientPredictedStep);
 
 	FC = ST_UT_FlakCannon(W);
 	if (FC != none)
@@ -8267,7 +8897,7 @@ function xxReplicateMove(
 					|| ST_ShockRifle(DetLocalWeapon) != none))
 				|| IGPlus_PushSafeAim
 				|| (ST_ShockRifle(DetLocalWeapon) != none && IGPlus_PredictiveShockCombos())
-				|| IGPlus_DetOwnBeamMode != 0))
+				|| IGPlus_DetOwnBeamMode != 0 || IGPlus_ClientHitVerdict != 0 || IGPlus_ShotEyeByte != 0))
 				bForcePacketSplit = true;
 			// Send the replayed tap as this frame's press: the move then carries
 			// the force bit and ends here, and the server fires it on this step.
@@ -8423,6 +9053,15 @@ function xxReplicateMove(
 		IGPlus_DetOwnBeamMode = 0;
 		IGPlus_OwnBallVerdict = 0;
 	}
+	// What our own trace said about this frame's shot (instant hit feedback).
+	if (IGPlus_ClientHitVerdict != 0) {
+		NewMove.DetChargeData = IGPlus_ClientHitVerdict;
+		IGPlus_ClientHitVerdict = 0;
+	}
+	// The eye height this frame's hitscan shot was traced from. Moves are
+	// reused, so every move gets its value.
+	NewMove.IGPlus_ShotEye = IGPlus_ShotEyeByte;
+	IGPlus_ShotEyeByte = 0;
 
 	bJustFired = false;
 	bJustAltFired = false;
@@ -8550,7 +9189,7 @@ function SendSavedMove(IGPlus_SavedMove Move, optional IGPlus_SavedMove OldMove)
 	else
 		RelLoc = Location - Base.Location;
 
-	MoveDeltaTime or_eq Clamp(int(Move.Delta * 65536), 0, 0xFFFFFF) << 8;
+	MoveDeltaTime or_eq IGPlus_PackDeltaEye(Move.Delta, Move.IGPlus_ShotEye);
 	if (Move.bDetReady) MoveDeltaTime or_eq 0x01;
 	MoveDeltaTime or_eq (Move.DetWeaponIndex & 0x07) << 1;
 	MoveDeltaTime or_eq (Move.DetChargeData & 0x0F) << 4;
@@ -10262,8 +10901,8 @@ function Died(pawn Killer, name damageType, vector HitLocation)
 			A.Trigger( Self, Killer );
 	if (Weapon.IsA('TournamentWeapon'))
 		TournamentWeapon(Weapon).bCanClientFire = false;
-	IGPlus_DetClearSwitchTrustState(zzUTPure.Settings.bEnableAllWeaponTrades);
-	IGPlus_bDetTradeClosed = zzUTPure.Settings.bEnableAllWeaponTrades == false;
+	IGPlus_DetClearSwitchTrustState(IGPlus_DetTradesEnabled());
+	IGPlus_bDetTradeClosed = IGPlus_DetTradesEnabled() == false;
 	IGPlus_bDetTradeLogged = false;
 	// Velocity has the killing push, which our client never saw.
 	IGPlus_TradeLoc = Location;
@@ -11690,6 +12329,7 @@ state Dying
 			if (bFireInput && IGPlus_bDetTradeClosed == false)
 				IGPlus_DetTradeLog("Rejected Trade!");
 			IGPlus_DetCloseTradeWindow();
+			IGPlus_NoteDeadShot(MoveDeltaTime);
 		}
 		// No translocator actions from the dead (their translocator is still
 		// held for a while): not this move's, nor a resent or held one.
@@ -11992,6 +12632,7 @@ function xxPlayerTickEvents(float DeltaTime)
 		if (IGPlus_PRTSeenAt > 0) {
 			IGPlus_PRTShownTick = IGPlus_PRTSeenTick;
 			IGPlus_PRTShownAge = FMax(0, CurrentTime - DeltaTime - IGPlus_PRTSeenAt);
+			IGPlus_PRTShownTime = CurrentTime - DeltaTime;
 		}
 		if (IGPlus_PRTServerTick != IGPlus_PRTSeenTick) {
 			IGPlus_PRTSeenTick = IGPlus_PRTServerTick;
@@ -12036,11 +12677,6 @@ function xxPlayerTickEvents(float DeltaTime)
 
 	if (zzbReportScreenshot)
 		xxDoShot();
-
-	if (zzForceSettingsLevel != zzOldForceSettingsLevel)
-	{
-		zzOldForceSettingsLevel = zzForceSettingsLevel;
-	}
 
 	if (PureLevel != None)	// Why would this be None?!
 		zzbDemoRecording = PureLevel.zzDemoRecDriver != None;
@@ -12838,8 +13474,15 @@ simulated function IGPlus_LocationOffsetFix_After(float DeltaTime) {
 	if (VSize(LocDelta) > VSize(MaxMove) + MaxStepHeight) {
 		IGPlus_LocationOffsetFix_PredictionOffset = IGPlus_LocationOffsetFix_OldLocation - Location - IGPlus_LocationOffsetFix_ExtrapolationOffset;
 		IGPlus_LocationOffsetFix_OldLocation = Location;
+		IGPlus_LocationOffsetFix_PrevServerLocation = IGPlus_LocationOffsetFix_ServerLocation;
+		IGPlus_LocationOffsetFix_PrevServerVelocity = IGPlus_LocationOffsetFix_ServerVelocity;
+		IGPlus_LocationOffsetFix_PrevServerLocationTime = IGPlus_LocationOffsetFix_ServerLocationTime;
+		IGPlus_LocationOffsetFix_PrevServerLocationTick = IGPlus_LocationOffsetFix_ServerLocationTick;
 		IGPlus_LocationOffsetFix_ServerLocation = Location;
+		IGPlus_LocationOffsetFix_ServerVelocity = Velocity;
 		IGPlus_LocationOffsetFix_ServerLocationTime = Level.TimeSeconds;
+		if (bbPlayer(GetLocalPlayer()) != None)
+			IGPlus_LocationOffsetFix_ServerLocationTick = bbPlayer(GetLocalPlayer()).IGPlus_PRTServerTick;
 		bReplicatedLocation = true;
 	} else {
 		IGPlus_LocationOffsetFix_OldLocation -= IGPlus_LocationOffsetFix_PredictionOffset;
@@ -14916,6 +15559,8 @@ simulated function float IGPlus_PSDownTimeFor(Weapon W) {
 		T = IGPlus_DetEffectiveAnimTime(WS.EightballDownTime, WS.default.EightballDownTime);
 	else if (ST_SniperRifle(W) != none)
 		T = IGPlus_DetEffectiveAnimTime(WS.SniperDownTime, WS.default.SniperDownTime);
+	else if (ST_SuperShockRifle(W) != none)
+		T = IGPlus_DetEffectiveAnimTime(WS.ShockDownTime, WS.default.ShockDownTime);
 	else if (ST_minigun2(W) != none)
 		T = IGPlus_DetEffectiveAnimTime(WS.MinigunDownTime, WS.default.MinigunDownTime);
 	else if (ST_PulseGun(W) != none)
@@ -17592,7 +18237,8 @@ simulated function IGPlus_SDPersonalMessage(
 	V.ReceiveLocalizedMessage(Message, Sw, RelatedPRI_1, RelatedPRI_2, OptionalObject);
 }
 
-// Server demo record of WeaponEffect.Send (rocket scorch marks).
+// Server demo record of WeaponEffect.Send (rocket scorch marks, the instagib
+// rifle's beam and ring).
 simulated function IGPlus_DemoWeaponEffect(
 	class<WeaponEffect> Effect,
 	PlayerReplicationInfo SourcePRI,
@@ -18947,7 +19593,6 @@ function IGPlus_ServerRequestSettings() {
 
 	IGPlus_ServerSendSetting("MinClientRate");
 	IGPlus_ServerSendSetting("MaxClientRate");
-	IGPlus_ServerSendSetting("ForceSettingsLevel");
 
 	IGPlus_ServerSendSetting("ShowTouchedPackage");
 	IGPlus_ServerSendSetting("HitFeedbackMode");
@@ -19033,6 +19678,7 @@ function IGPlus_WeaponRequestSettings() {
 	IGPlus_WeaponSendSetting("bEnablePingCompensation");
 	IGPlus_WeaponSendSetting("bEnableSubTickCompensation");
 	IGPlus_WeaponSendSetting("bEnablePreciseRewindTime");
+	IGPlus_WeaponSendSetting("bEnableTrades");
 	IGPlus_WeaponSendSetting("PreciseRewindTimeMaxDeviationMs");
 	IGPlus_WeaponSendSetting("PingCompensationMax");
 	IGPlus_WeaponSendSetting("bEnableAnimationAdaptiveHeadHitbox");

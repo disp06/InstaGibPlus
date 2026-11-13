@@ -17,6 +17,7 @@ An InstaGib focussed fork of TimTim's NewNet mutator for Unreal Tournament.
 * Working client forced models for enemies and teammates
 * Working client-side hitsounds with the option to use custom hitsound packages
 * Different Shock beam types (team-colored, none, instant beam)
+* InstaGib and Sniper Arena with server-side hit detection and ping compensation (NextIG, NextSA)
 * Fixed pop-in of enemies around corners
 * Fixed delay of visible flag pick-up
 * Fixed stuttering on respawn with high ping
@@ -36,9 +37,6 @@ These settings can be found in **InstaGibPlus.ini** under section **\[ClientSett
 1. [bSkinEnemyUseIndexMap](#bskinenemyuseindexmap)
 1. [bSkinTeamUseIndexMap](#bskinteamuseindexmap)
 1. [bUnlitSkins](#bunlitskins)
-1. [HitSound](#hitsound)
-1. [TeamHitSound](#teamhitsound)
-1. [bDisableForceHitSounds](#bdisableforcehitsounds)
 1. [bEnableHitSounds](#benablehitsounds)
 1. [bEnableTeamHitSounds](#benableteamhitsounds)
 1. [bHitSoundPitchShift](#bhitsoundpitchshift)
@@ -72,6 +70,10 @@ These settings can be found in **InstaGibPlus.ini** under section **\[ClientSett
 1. [bCameraCorrectionSmoothing](#bcameracorrectionsmoothing)
 1. [CameraCorrectionSmoothingTime](#cameracorrectionsmoothingtime)
 1. [bSmoothLiftJump](#bsmoothliftjump)
+1. [bSpectatorShowDamageNumbers](#bspectatorshowdamagenumbers)
+1. [DamageNumberDuration](#damagenumberduration)
+1. [DamageNumberFade](#damagenumberfade)
+1. [bDemoShowRealModels](#bdemoshowrealmodels)
 1. [bPredictedSwitching](#bpredictedswitching)
 1. [bPredictedTranslocation](#bpredictedtranslocation)
 1. [bPredictedDiscBoost](#bpredicteddiscboost)
@@ -207,15 +209,6 @@ Any value below zero disables forcing models. For example, if you set [DesiredSk
 
 If `True`, player skins will not be affected by surrounding lighting, usually making them brighter.
 
-## HitSound
-**Reserved**
-
-## TeamHitSound
-**Reserved**
-
-## bDisableForceHitSounds
-**Reserved**
-
 ## bEnableHitSounds
 **Type: bool**  
 **Default: True**  
@@ -250,6 +243,8 @@ Selects where hit sound events come from.
 
 * `HSSRC_Server` ➜ Use server-side hit confirmations (accurate but delayed by ping).
 * `HSSRC_Client` ➜ Use client-side hit detection (instant but can be inaccurate).
+
+`HSSRC_Client` applies while you carry a NewNet weapon, and to the rifles of NextIG and NextSA. With those two your own trace plays the sound at the click. With [bEnablePreciseRewindTime](#benablepreciserewindtime) on, that trace tests the other players where the server will place them for your shot, which can be a few units from where your screen draws a player who just changed direction. The server still decides the hit. A sound can play for a shot the server counts as a miss, and a hit only the server saw plays its sound a ping late. With every other weapon the hit sound is the server's.
 
 ## SelectedHitSound
 **Type: int**  
@@ -455,6 +450,31 @@ How long the camera takes to ease out a correction (about 95% of it is gone afte
 **Default: True**  
 
 If set to `True`, when you jump or step off a moving lift, you move straight to where the server has you and your view eases there, instead of snapping there a ping later.
+
+## bSpectatorShowDamageNumbers
+**Type: bool**  
+**Default: False**  
+
+If set to `True`, you see damage numbers for the player you watch as a spectator. The server has to allow it with [ShowDamageNumberMode](#showdamagenumbermode). The command [ShowDamageNumbers](#showdamagenumbers) turns it on and off.
+
+## DamageNumberDuration
+**Type: float**  
+**Default: 2.5**  
+**Unit: s**  
+
+How long a damage number stays on screen. The game clamps values below 0.1 or above 10.
+
+## DamageNumberFade
+**Type: float**  
+**Default: 5.0**  
+
+How a damage number fades out. 1 is a steady fade, and higher values make it fade sooner. The game clamps values below 1 or above 10.
+
+## bDemoShowRealModels
+**Type: bool**  
+**Default: True**  
+
+If set to `True`, demos show the models and skins each player chose, also when the recording player had forced models on. In the menu this is Show Real Skins In Demos.
 
 ## bPredictedSwitching
 **Type: bool**  
@@ -774,6 +794,8 @@ How quickly the HitMarker becomes transparent. Higher values mean sharper drop-o
 * `HMSRC_Server` ➜ HitMarkers are triggered server-side, accurate but delayed by ping
 * `HMSRC_Client` ➜ HitMarkers are triggered client-side, inaccurate but instant
 
+`HMSRC_Client` applies while you carry a NewNet weapon, and to the rifles of NextIG and NextSA, as described under [HitSoundSource](#hitsoundsource). With every other weapon the hit marker is the server's.
+
 ## bUseCrosshairFactory
 **Type: bool**  
 **Default: False**  
@@ -822,7 +844,7 @@ Enable client-side animation timing for Bio Rifle ping-compensated logic.
 **Type: bool**  
 **Default: True**  
 
-Enable client-side animation timing for Shock Beam ping-compensated logic.
+Enable client-side animation timing for Shock Beam ping-compensated logic. The InstaGib rifle of NextIG does not use this setting. It always draws its own beam at once.
 
 ## bShockProjectileUseClientSideAnimations
 **Type: bool**  
@@ -864,7 +886,7 @@ Enable client-side animation timing for Rocket Launcher ping-compensated logic.
 **Type: bool**  
 **Default: True**  
 
-Enable client-side animation timing for Sniper ping-compensated logic.
+Enable client-side animation timing for Sniper ping-compensated logic. Not used in NextSA, where the rifle always has its client-side shell case and muzzle flash.
 
 ## bTranslocatorUseClientSideAnimations
 **Type: bool**  
@@ -928,6 +950,12 @@ Parameters marked `optional` do not have to be supplied.
 1. [SniperClientSideAnimations](#sniperclientsideanimations)
 1. [TranslocatorClientSideAnimations](#translocatorclientsideanimations)
 1. [ToggleSmoothDiscCorrections](#togglesmoothdisccorrections)
+1. [ShowDamageNumbers](#showdamagenumbers)
+1. [TestHitMarker](#testhitmarker)
+1. [TestHitSound](#testhitsound)
+1. [IGPlus_FOV](#igplus_fov)
+1. [DrawServerLocation](#drawserverlocation)
+1. [PrintWeaponState](#printweaponstate)
 1. [NetcodeHelp](#netcodehelp)
 1. [bEnableInputReplication](#benableinputreplication-command)
 1. [bEnableSnapshotInterpolation](#benablesnapshotinterpolation-command)
@@ -1127,6 +1155,30 @@ Enable/disable client-side animations for Translocator behavior.
 ## ToggleSmoothDiscCorrections
 Turns [bSmoothDiscCorrections](#bsmoothdisccorrections) on or off and says which.
 
+## ShowDamageNumbers
+Spectators only. Turns [bSpectatorShowDamageNumbers](#bspectatorshowdamagenumbers) on or off and says which.
+
+## TestHitMarker
+**Parameters: (optional int Damage)**
+
+Shows a test hit marker and a test damage number for a hit of that much damage, again and again, in each team's colour in turn. `TestHitMarker 0` stops it.
+
+## TestHitSound
+**Parameters: (optional int Damage)**
+
+Plays your hit sound for a hit of that much damage. Each call uses the next team, so you hear the enemy and the team sound.
+
+## IGPlus_FOV
+**Parameters: (float FOV)**
+
+Sets your FOV. The value is kept between 80 and your `MaxFOV`, and `MaxFOV` itself is kept between 130 and 360.
+
+## DrawServerLocation
+Debug. Turns a second copy of each player on or off, drawn at the last position the server sent. It shows how far [bEnableLocationOffsetFix](#benablelocationoffsetfix) moves the players on your screen.
+
+## PrintWeaponState
+Debug. Prints the name and state of the weapon you hold.
+
 ## NetcodeHelp
 Prints netcode runtime settings and available netcode debug commands.
 
@@ -1215,9 +1267,32 @@ Replaces all normal weapons with IG+ alternatives.
 
 InstaGib, but with a ping compensated custom weapon.
 
+## InstaGibPlus_11.NextIG
+
+InstaGib with the deterministic SuperShockRifle. The server traces every shot itself and rewinds the other players by the shooter's ping, or by [bEnablePreciseRewindTime](#benablepreciserewindtime) if that is on. The shooter's client draws its own beam and ring at once. No client setting turns that off. With ping compensation off, the beam comes from the server. With [HitSoundSource](#hitsoundsource) and [HitMarkerSource](#hitmarkersource) set to Client, the hit sound and hit marker play at the click from the shooter's own trace. The server's trace still decides the hit.
+
+* Load it in place of ST_Mutator, not together with it.
+* Its weapon settings are in the section `WeaponSettingsInstaGib`.
+* There is no translocator, as in stock InstaGib and NewNetIG. The game's translocator setting does nothing here.
+* The rifle has no range limit.
+* A shot from a player who just died only counts with [bEnableTrades](#benabletrades) on in its weapon settings. It is off by default.
+* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime) on.
+
 ## InstaGibPlus_11.NewNetSA
 
 SniperArena, but with a ping compensated custom weapon.
+
+## InstaGibPlus_11.NextSA
+
+SniperArena with the deterministic SniperRifle. The server traces every shot itself and rewinds the other players by the shooter's ping, or by [bEnablePreciseRewindTime](#benablepreciserewindtime) if that is on. The sniper settings apply, such as the reduced hitbox, the reload time and the damage. Everyone gets `SA_SniperRifle`. It is the IG+ sniper with its client-side shell case and muzzle flash always on, and with the same hit sound and hit marker at the click as NextIG.
+
+* Load it in place of ST_Mutator, not together with it.
+* Its weapon settings are in the section `WeaponSettingsSniperArena`.
+* The rules are those of NewNetSA. Everyone spawns with the rifle and 50 bullets, and a shot uses one.
+* NextSA removes every weapon in the map. All other ammo becomes a bullet box, and a bullet box holds 50 bullets.
+* There is no translocator, as in stock Sniper Arena and NewNetSA. The game's translocator setting does nothing here.
+* A shot from a player who just died only counts with [bEnableTrades](#benabletrades) on in its weapon settings. It is off by default.
+* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime) on.
 
 ## InstaGibPlus_11.MutFraggerArena
 
@@ -1228,9 +1303,17 @@ Similar to SniperArena, but with a Sniper Rifle that has custom zoom and is inac
 Allows players to replace the messages of players dying in the console with weapon icons in a configurable location on your screen.
 
 # Usage
-For InstaGib, make sure the mutator **InstaGibPlus_11.NewNetIG** is loaded via your map vote configuration or during server launch.
+Load one weapon mutator for the mode you want, via your map vote configuration or during server launch.
 
-InstaGib+ has minimal weapons code and will load the default UT weapons if the NewNetIG mutator is not loaded, so it is absolutely unusable in normal weapons, make sure to use it only if your objective is to play or to run an InstaGib centered server.
+| Mode | Mutator | Who decides a hit |
+|---|---|---|
+| Normal weapons | **InstaGibPlus_11.ST_Mutator** | The server, with ping compensation |
+| InstaGib | **InstaGibPlus_11.NewNetIG** | The shooter's client |
+| InstaGib | **InstaGibPlus_11.NextIG** | The server, with ping compensation |
+| Sniper Arena | **InstaGibPlus_11.NewNetSA** | The shooter's client |
+| Sniper Arena | **InstaGibPlus_11.NextSA** | The server, with ping compensation |
+
+Load only one of them. With none of them loaded, players get the default UT weapons with no lag compensation.
 
 When connected to the server type **'mutate playerhelp'** in the console to view the available commands and options.
 
@@ -1254,9 +1337,6 @@ As spectator, you may need to add 'mutate pure' + command (mutate pureshowtickra
 # Server Settings
 Server settings can be found inside InstaGibPlus.ini.
 
-1. [HeadshotDamage](#headshotdamage)
-1. [SniperSpeed](#sniperspeed)
-1. [SniperDamagePri](#sniperdamagepri)
 1. [NNAnnouncer](#nnannouncer)
 1. [bUTPureEnabled](#butpureenabled)
 1. [Advertise](#advertise)
@@ -1271,7 +1351,6 @@ Server settings can be found inside InstaGibPlus.ini.
 1. [MinClientRate](#minclientrate)
 1. [MaxClientRate](#maxclientrate)
 1. [bAdvancedTeamSay](#badvancedteamsay)
-1. [ForceSettingsLevel](#forcesettingslevel)
 1. [bWarmup](#bwarmup)
 1. [WarmupTimeLimit](#warmuptimelimit)
 1. [bCoaches](#bcoaches)
@@ -1285,9 +1364,6 @@ Server settings can be found inside InstaGibPlus.ini.
 1. [bUseFastWeaponSwitch](#busefastweaponswitch)
 1. [bTellSpectators](#btellspectators)
 1. [PlayerPacks](#playerpacks)
-1. [DefaultHitSound](#defaulthitsound)
-1. [DefaultTeamHitSound](#defaultteamhitsound)
-1. [bForceDefaultHitSounds](#bforcedefaulthitsounds)
 1. [TeleRadius](#teleradius)
 1. [ThrowVelocity](#throwvelocity)
 1. [bForceDemo](#bforcedemo)
@@ -1332,33 +1408,11 @@ Server settings can be found inside InstaGibPlus.ini.
 1. [bEnablePredictedDiscBoost](#benablepredicteddiscboost)
 1. [bEnableCarcassCollision](#benablecarcasscollision)
 1. [ShowTouchedPackage](#showtouchedpackage)
-1. [bEnableDamageDebugMode](#benabledamagedebugmode)
-1. [bEnableDamageDebugConsoleMessages](#benabledamagedebugconsolemessages)
+1. [ShowDamageNumberMode](#showdamagenumbermode)
 1. [bEnableHitboxDebugMode](#benablehitboxdebugmode)
 1. [ExcludeMapsForKickers](#excludemapsforkickers)
 1. [HitFeedbackMode](#hitfeedbackmode)
 1. [ForcedSettings](#forcedsettings)
-
-## HeadshotDamage
-
-**Type: float**  
-**Default: 100**  
-
-Controls how much damage a headshot with the sniper rifle deals.
-
-## SniperSpeed
-
-**Type: float**  
-**Default: 1**  
-
-Controls sniper rifle reload time, higher values lead to less time between shots.
-
-## SniperDamagePri
-
-**Type: float**  
-**Default: 60**  
-
-Controls damage of body hits by sniper rifle.
 
 ## NNAnnouncer
 
@@ -1481,18 +1535,6 @@ Advanced TeamSay allows showing game-information in your chat messages, by repla
 - `%a` ➜ "SB <Armor>A" or "<Armor>A"
 - `%P`, `%p` ➜ Current CTF objective
 
-## ForceSettingsLevel
-
-**Type: int**  
-**Default: 2**  
-
-When to check that default settings for all objects are correct client-side.
-
-- `0` and below ➜ never
-- `1` ➜ once after PostNetBeginPlay
-- `2` ➜ in addition, every time a new object is spawned
-- `3` and above ➜ in addition, once every 5000 server-ticks on average
-
 ## bWarmup
 
 **Type: bool**  
@@ -1594,15 +1636,6 @@ Enable or disable telling spectators of reason for kicks.
 
 Config list of supported player packs
 
-## DefaultHitSound
-**Reserved**
-
-## DefaultTeamHitSound
-**Reserved**
-
-## bForceDefaultHitSounds
-**Reserved**
-
 ## HitFeedbackMode
 
 **Type: EHitFeedbackMode**  
@@ -1652,19 +1685,19 @@ Distance to any position over the last 500ms for hits to be counted.
 
 Send package-names of touched actors to clients when those clients touch the actors.
 
-## bEnableDamageDebugMode
+## ShowDamageNumberMode
 
-**Type: bool**  
-**Default: False**  
+**Type: EShowDamageNumberMode**  
+**Default: DMG_Disabled**  
 
-If `True`, enables server-side damage debug instrumentation.
+Controls who sees damage numbers on screen, and whether the player who dealt the damage also gets a console line.
 
-## bEnableDamageDebugConsoleMessages
+* `DMG_Disabled`: Nobody sees damage numbers
+* `DMG_SpecOnly`: Spectators see them for the player they watch, if they turn on [bSpectatorShowDamageNumbers](#bspectatorshowdamagenumbers)
+* `DMG_AlwaysHUD`: Players see the damage they deal, and spectators as above
+* `DMG_AlwaysHUDConsole`: As `DMG_AlwaysHUD`, and the player who dealt the damage also gets a console line
 
-**Type: bool**  
-**Default: False**  
-
-If `True`, emits damage debug information to console messages.
+NextIG shows no damage numbers, whatever this is set to. Every hit there is a kill.
 
 ## bEnableHitboxDebugMode
 
@@ -1733,7 +1766,7 @@ Trade uncertainty relative to shooters ping. Reasonable values range from 0 to 1
 **Type: bool**  
 **Default: False**  
 
-If True, trades also work with the IG+ shock rifle (beam and combo), rocket launcher, flak cannon, bio rifle, ripper and sniper rifle, not only the NewNet weapons. A shot that reaches the server just after its shooter died still counts if, by the same rule as the NewNet weapons ([bRestrictTrading](#brestricttrading), [MaxTradeTimeMargin](#maxtradetimemargin), [TradePingMargin](#tradepingmargin)), he fired it first. Rockets he was loading are kept for that window, so a release just after death still fires them; once the window is over, the load is dropped. A traded shot leaves from where his screen had him when he fired, as long as he could have got there since he died. Needs the weapon's bEnablePingCompensation.
+If True, trades also work with the IG+ shock rifle (beam and combo), rocket launcher, flak cannon, bio rifle, ripper, sniper rifle and super shock rifle, not only the NewNet weapons. A shot that reaches the server just after its shooter died still counts if, by the same rule as the NewNet weapons ([bRestrictTrading](#brestricttrading), [MaxTradeTimeMargin](#maxtradetimemargin), [TradePingMargin](#tradepingmargin)), he fired it first. Rockets he was loading are kept for that window, so a release just after death still fires them; once the window is over, the load is dropped. A traded shot leaves from where his screen had him when he fired, as long as he could have got there since he died. Needs the weapon's bEnablePingCompensation. NextIG and NextSA do not read this setting. They have [bEnableTrades](#benabletrades) in their weapon settings.
 
 ## bEnableInputReplication
 
@@ -2026,6 +2059,18 @@ If True, shooting your own translocator disc with the shock beam or a shock comb
 
 Per-preset settings in the `[WeaponSettings*]` sections. Only the netcode-relevant ones are listed here.
 
+Each weapon mutator reads its own section of InstaGibPlus.ini, and writes it with the default values the first time it runs:
+
+| Mutator | Section |
+|---|---|
+| ST_Mutator | `WeaponSettingsOldNet` |
+| NewNetIG, NewNetSA | `WeaponSettingsNewNet` |
+| NextIG | `WeaponSettingsInstaGib` |
+| NextSA | `WeaponSettingsSniperArena` |
+| MutFraggerArena | `WeaponSettingsFraggerArena` |
+
+The URL option `?IGPlusWeaponSettings=<section>` makes the mutator read another section.
+
 ## bEnablePingCompensation
 
 **Type: bool**  
@@ -2052,14 +2097,14 @@ A shock combo on its owner's own ball goes off where the owner saw the ball. If 
 ## bEnableSubTickCompensation
 
 **Type: bool**  
-**Default: False**  
+**Default: False** (True in NextIG and NextSA)  
 
 If enabled, the rewound position is interpolated between the two snapshots around the target time instead of snapping to the older one.
 
 ## bEnablePreciseRewindTime
 
 **Type: bool**  
-**Default: False**  
+**Default: False** (True in NextIG and NextSA)  
 
 If enabled, a hitscan shot rewinds the other players to the moment the shooter's screen showed them, instead of guessing from the shooter's average ping. The server tells each player the server time of every update it sends. A shot then carries the update the shooter's screen showed and how long the screen had been moving players forward past it. The server places every player the same way: at their snapshot from that update, carried forward by their velocity for the same time. Network jitter, the wait for the server's next tick and ping changes stop moving the rewound players. It doesn't need bEnableSubTickCompensation. With bEnableWarpFix on, a player whose packets stalled for longer than WarpFixDelay stays where clients hold them. Shots traced later in the tick than the moves arrive (minigun, pulse beam, enforcer refire) use the same report. If the shot's rewind is above PingCompensationMax, or differs from the server's own ping measurement by more than PreciseRewindTimeMaxDeviationMs, the shot uses the old rewind. Needs bEnablePingCompensation and bEnableInputReplication off. Not used for a player with snapshot interpolation. Console `enableDebugData 1` shows a line per hitscan shot: the rewind used, the old rewind and how far the change moved the players.
 
@@ -2071,12 +2116,155 @@ If enabled, a hitscan shot rewinds the other players to the moment the shooter's
 
 How far a shot's [bEnablePreciseRewindTime](#benablepreciserewindtime) rewind may differ from the server's own ping measurement before the server falls back to the old rewind. Limits how much extra rewind a modified client can claim.
 
+## bEnableTrades
+
+**Type: bool**  
+**Default: False**  
+
+NextIG and NextSA only. If True, a shot that reaches the server just after its shooter died still counts, by the rule described under [bEnableAllWeaponTrades](#benableallweapontrades). In these two modes this setting decides in place of that server setting. The other modes do not read it.
+
 ## RocketCompensatePing
 
 **Type: bool**  
 **Default: True**  
 
 If enabled, projectiles are fast-forwarded by the shooter's ping at spawn, with targets rewound for each simulated step.
+
+## FlakCompensatePing
+
+**Type: bool**  
+**Default: True**  
+
+As [RocketCompensatePing](#rocketcompensateping), for flak chunks and slugs. With it off, the flak cannon does not use the deterministic fire path.
+
+## RipperCompensatePing
+
+**Type: bool**  
+**Default: True**  
+
+As [RocketCompensatePing](#rocketcompensateping), for ripper blades of both fire modes. With it off, the ripper does not use the deterministic fire path.
+
+## BioCompensatePing
+
+**Type: bool**  
+**Default: True**  
+
+As [RocketCompensatePing](#rocketcompensateping), for bio gel and the charged glob. With it off, the bio rifle does not use the deterministic fire path.
+
+## PulseCompensatePing
+
+**Type: bool**  
+**Default: True**  
+
+If enabled, pulse spheres are fast-forwarded by the shooter's ping at spawn, and the server tests the pulse beam against where the shooter saw the other players.
+
+## TranslocatorCompensatePing
+
+**Type: bool**  
+**Default: False**  
+
+If enabled, the disc is fast-forwarded by the thrower's ping. Not needed while [bEnableDeterministicTranslocator](#benabledeterministictranslocator) is on, which handles the disc itself.
+
+## SniperUseReducedHitbox
+
+**Type: bool**  
+**Default: False**  
+
+If enabled, the server tests sniper shots against a body cylinder with a smaller head cylinder on top, instead of the player's full collision cylinder. A shot that passes beside the head misses. [HeadHalfHeight](#headhalfheight) and [HeadRadius](#headradius) set the size of the head.
+
+## ShockBeamUseReducedHitbox
+
+**Type: bool**  
+**Default: False**  
+
+As [SniperUseReducedHitbox](#sniperusereducedhitbox), for the shock rifle's beam and the IG+ SuperShockRifle. The SuperShockRifle's own beam and its hit sound at the click follow the same rule as the server.
+
+## EnforcerUseReducedHitbox
+
+**Type: bool**  
+**Default: False**  
+
+As [SniperUseReducedHitbox](#sniperusereducedhitbox), for the enforcer.
+
+## HeadHalfHeight
+
+**Type: float**  
+**Default: 7.5**  
+**Unit: uu**  
+
+Half the height of the head cylinder of the reduced hitbox. The head gets lower as the player crouches and is gone at a full crouch.
+
+## HeadRadius
+
+**Type: float**  
+**Default: 11.0**  
+**Unit: uu**  
+
+Radius of the head cylinder of the reduced hitbox.
+
+## bEnableAnimationAdaptiveHeadHitbox
+
+**Type: bool**  
+**Default: False**  
+
+If enabled, the head cylinder of the reduced hitbox follows the player's animation, so it sits where the model's head is.
+
+# Demos
+
+The demo features only work in demos recorded on a server that runs this build.
+
+**Client demos**
+* Projectiles show where they were on your screen, and your own projectiles show from the moment you fired.
+* Shock combos you set off show as they did on your screen.
+* The match timer and the boots counter show, also in a spectator's demo.
+
+**Server demos**
+* Following a player in first person shows what that player saw: the exact view, the eye height, the zoom, and the other players where that player saw them.
+* The followed player's hit markers, hit sounds, damage numbers and screen flashes show.
+* The match timer and the boots counter show.
+* The InstaGib rifle's beam and ring show, with NewNetIG and with NextIG. When you follow the shooter in first person, the beam starts at the gun.
+* The followed player's messages, chat, announcer sounds and pickup messages show, and so do the match start countdown, killing sprees and the won or lost announcer.
+
+[bDemoShowRealModels](#bdemoshowrealmodels) decides whether a demo shows forced models or the real ones.
+
+# Server Log
+
+Every IG+ event line in the server log ends with the server's clock time, for example `at=21:15:07`, so you can match a line to a player's report or to a demo.
+
+When a match ends or a player leaves, the server writes one `[DET-SUMMARY]` line for that player, unless every count is zero:
+
+| Field | Meaning |
+|---|---|
+| `throws`, `translocates` | Translocator throws and translocates |
+| `landedApart` | Landings the player saw corrected |
+| `absorbed` | Landings a little apart that the server took over, so the player saw nothing |
+| `throwApart` | Throws the server could not start from the client's spot |
+| `rejects` | Translocator actions the server refused |
+| `late` | Translocator actions that arrived through a re-send or were held back |
+| `jumpDropped` | Jumps at a landing that only the server took |
+| `shotRefused` | Shots the client showed while the server's fire window was closed |
+| `shotUnbound` | Shots the client showed while the server held another weapon |
+| `switchMismatch` | Weapon switches the two sides resolved differently |
+| `clockHolds` | Seconds in which shots were held by [DetFireClockMargin](#detfireclockmargin) |
+| `hitShots` | NextIG and NextSA: shots that carried the result of the shooter's own trace |
+| `hitBoth` | Of those, shots that hit a player in both traces |
+| `hitClientOnly` | Shots that hit a player only in the shooter's own trace. The shooter got a hit sound and the server counted a miss |
+| `hitServerOnly` | Shots that hit a player only in the server's trace. The hit sound came a ping late |
+| `hitHeadDiff` | NextSA: hits the two traces counted differently as head or body |
+| `hitDrawnDiff` | Shots where the shooter's trace against the players as drawn on screen said the opposite of its trace against them where the server places them |
+| `hitDrawnRight` | Of those, shots where the server agreed with the drawn players |
+| `deadShots` | Rifle and sniper shots the shooter's client fired when the server already had the shooter dead. The server fired nothing |
+| `deadShotHits` | Of those, shots that hit a player in the shooter's own trace, so a hit sound played for a shot that did not count |
+| `eyeUsed` | Rifle and sniper shots the server started at the eye height the shooter's client sent |
+| `eyeRefused` | Shots whose sent eye height was more than 24 units from the server's own. The server used its own |
+| `eyeDiffAvg`, `eyeDiffMax` | How far the sent eye height was from the server's own, in units |
+| `ping`, `lostMoves` | The player's ping and lost moves |
+
+The single lines behind the shot and switch counts are only written while [TraceInput](#traceinput) is on for that player.
+
+Every shot counted in `hitClientOnly`, `hitServerOnly`, `hitDrawnDiff` or `deadShots` also writes one `[DET-HIT]` line. Its first word says which: `clientOnly`, `serverOnly`, `drawnOnly` (only the drawn players were hit), `drawnMissed` (only the drawn players were missed) or `deadShot`. It names the weapon, the nearest player on the server's line, the distance to that player and that player's speed, the rewind used and the shooter's ping. For a `clientOnly` line, `gapXY` and `gapZ` say by how many units the server's line passed that player's rewound body, and `blocked=True` means something solid was in between. `eyeDiff` is the shooter's eye height minus the server's own for that shot. A shooter with `enableDebugData 1` gets the same line on screen.
+
+The IG+ SuperShockRifle and the IG+ sniper start a shot at the shooter's eye. The client sends its eye height with the shot, and the server starts its trace there. Each side works out the eye height on its own, and only the client's follows view shake, so without this the server's line can be above or below the crosshair's line right after a hit, a landing or a step.
 
 # Building
 

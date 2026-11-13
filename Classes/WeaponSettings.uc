@@ -182,6 +182,10 @@ var config int   PreciseRewindTimeMaxDeviationMs;
 
 var config int   PingCompensationMax;
 
+// NextIG and NextSA only: do shots from a player who just died still count?
+// Every other mode reads the server setting bEnableAllWeaponTrades.
+var config bool  bEnableTrades;
+
 var config bool  bEnableAnimationAdaptiveHeadHitbox;
 
 var config int   InvisibilityDuration;
@@ -193,6 +197,179 @@ var config int   ArmorCharge;
 var config int   ThighPadsCharge;
 
 var config int   HealthPackHealingAmount;
+
+// NextIG (Mode 1) and NextSA (Mode 2) keep only the settings they use in
+// their ini section: the rewind and hitbox ones, and their own weapon's (the
+// same ones the menu's Weapon tab shows, IGPlus_WeaponSettingsContent).
+// SaveConfig always writes every setting, so the others are taken out again
+// after it. A setting that is not in the ini keeps its default.
+// A new setting has to be added here, or it stays in those sections.
+function TrimConfigTo(int Mode) {
+	if (Mode != 1 && Mode != 2) {
+		// Not read outside NextIG and NextSA.
+		ClearConfig("bEnableTrades");
+		return;
+	}
+	ClearConfig("bReplaceImpactHammer");
+	ClearConfig("bReplaceTranslocator");
+	ClearConfig("bReplaceEnforcer");
+	ClearConfig("bReplaceBioRifle");
+	ClearConfig("bReplaceShockRifle");
+	ClearConfig("bReplaceSuperShockRifle");
+	ClearConfig("bReplacePulseGun");
+	ClearConfig("bReplaceRipper");
+	ClearConfig("bReplaceMinigun");
+	ClearConfig("bReplaceFlakCannon");
+	ClearConfig("bReplaceRocketLauncher");
+	ClearConfig("bReplaceSniperRifle");
+	ClearConfig("bReplaceWarheadLauncher");
+	ClearConfig("bEnableEnhancedSplashBio");
+	ClearConfig("bEnableEnhancedSplashShockCombo");
+	ClearConfig("bEnableEnhancedSplashShockProjectile");
+	ClearConfig("bEnableEnhancedSplashRipperSecondary");
+	ClearConfig("bEnableEnhancedSplashFlakSlug");
+	ClearConfig("bEnableEnhancedSplashRockets");
+	ClearConfig("bEnhancedSplashIgnoreStationaryPawns");
+	ClearConfig("SplashMaxDiffraction");
+	ClearConfig("SplashMinDiffractionDistance");
+	ClearConfig("SplashWraparoundRadiusScale");
+	ClearConfig("WarheadSelectTime");
+	ClearConfig("WarheadDownTime");
+	if (Mode != 2) ClearConfig("SniperSelectTime");
+	if (Mode != 2) ClearConfig("SniperDownTime");
+	if (Mode != 2) ClearConfig("SniperDamage");
+	if (Mode != 2) ClearConfig("SniperHeadshotDamage");
+	if (Mode != 2) ClearConfig("SniperMomentum");
+	if (Mode != 2) ClearConfig("SniperHeadshotMomentum");
+	if (Mode != 2) ClearConfig("SniperReloadTime");
+	if (Mode != 2) ClearConfig("SniperUseReducedHitbox");
+	ClearConfig("EightballSelectTime");
+	ClearConfig("EightballDownTime");
+	ClearConfig("RocketDamage");
+	ClearConfig("RocketSelfDamage");
+	ClearConfig("RocketHurtRadius");
+	ClearConfig("RocketMomentum");
+	ClearConfig("RocketSpreadSpacingDegrees");
+	ClearConfig("RocketSpeed");
+	ClearConfig("GrenadeDamage");
+	ClearConfig("GrenadeHurtRadius");
+	ClearConfig("GrenadeMomentum");
+	ClearConfig("RocketCompensatePing");
+	ClearConfig("FlakSelectTime");
+	ClearConfig("FlakPostSelectTime");
+	ClearConfig("FlakDownTime");
+	ClearConfig("FlakChunkDamage");
+	ClearConfig("FlakChunkMomentum");
+	ClearConfig("FlakChunkLifespan");
+	ClearConfig("FlakChunkDropOffStart");
+	ClearConfig("FlakChunkDropOffEnd");
+	ClearConfig("FlakChunkDropOffDamageRatio");
+	ClearConfig("FlakChunkRandomSpread");
+	ClearConfig("FlakChunkRandomSpreadSize");
+	ClearConfig("FlakSlugDamage");
+	ClearConfig("FlakSlugHurtRadius");
+	ClearConfig("FlakSlugMomentum");
+	ClearConfig("FlakCompensatePing");
+	ClearConfig("RipperSelectTime");
+	ClearConfig("RipperDownTime");
+	ClearConfig("RipperHeadshotDamage");
+	ClearConfig("RipperHeadShotDamageWallMultiplier");
+	ClearConfig("RipperHeadshotMomentum");
+	ClearConfig("RipperPrimaryDamage");
+	ClearConfig("RipperPrimaryDamageWallMultiplier");
+	ClearConfig("RipperPrimaryMomentum");
+	ClearConfig("RipperSecondaryHurtRadius");
+	ClearConfig("RipperSecondaryDamage");
+	ClearConfig("RipperSecondaryMomentum");
+	ClearConfig("RipperCompensatePing");
+	ClearConfig("MinigunSelectTime");
+	ClearConfig("MinigunDownTime");
+	ClearConfig("MinigunSpinUpTime");
+	ClearConfig("MinigunUnwindTime");
+	ClearConfig("MinigunBulletInterval");
+	ClearConfig("MinigunAlternateBulletInterval");
+	ClearConfig("MinigunMinDamage");
+	ClearConfig("MinigunMaxDamage");
+	ClearConfig("MinigunAltMinDamage");
+	ClearConfig("MinigunAltMaxDamage");
+	ClearConfig("PulseSelectTime");
+	ClearConfig("PulseDownTime");
+	ClearConfig("PulseSphereDamage");
+	ClearConfig("PulseSphereMomentum");
+	ClearConfig("PulseSphereSpeed");
+	ClearConfig("PulseSphereFireRate");
+	ClearConfig("PulseSphereCollisionRadius");
+	ClearConfig("PulseSphereCollisionHeight");
+	ClearConfig("PulseBoltDPS");
+	ClearConfig("PulseBoltMomentum");
+	ClearConfig("PulseBoltMaxAccumulate");
+	ClearConfig("PulseBoltGrowthDelay");
+	ClearConfig("PulseBoltMaxSegments");
+	ClearConfig("PulseCompensatePing");
+	if (Mode != 1) ClearConfig("ShockSelectTime");
+	if (Mode != 1) ClearConfig("ShockDownTime");
+	ClearConfig("ShockBeamDamage");
+	ClearConfig("ShockBeamMomentum");
+	if (Mode != 1) ClearConfig("ShockBeamUseReducedHitbox");
+	ClearConfig("ShockProjectileDamage");
+	ClearConfig("ShockProjectileHurtRadius");
+	ClearConfig("ShockProjectileMomentum");
+	ClearConfig("ShockProjectileBlockBullets");
+	ClearConfig("ShockProjectileBlockFlakChunk");
+	ClearConfig("ShockProjectileBlockFlakSlug");
+	ClearConfig("ShockProjectileTakeDamage");
+	ClearConfig("ShockProjectileHealth");
+	ClearConfig("ShockComboDamage");
+	ClearConfig("ShockComboMomentum");
+	ClearConfig("ShockComboHurtRadius");
+	ClearConfig("ShockComboRewindMax");
+	ClearConfig("BioSelectTime");
+	ClearConfig("BioDownTime");
+	ClearConfig("BioDamage");
+	ClearConfig("BioMomentum");
+	ClearConfig("BioPrimaryInstantExplosion");
+	ClearConfig("BioAltDamage");
+	ClearConfig("BioAltMomentum");
+	ClearConfig("BioHurtRadiusBase");
+	ClearConfig("BioHurtRadiusMax");
+	ClearConfig("BioCompensatePing");
+	ClearConfig("EnforcerSelectTime");
+	ClearConfig("EnforcerDownTime");
+	ClearConfig("EnforcerDamage");
+	ClearConfig("EnforcerMomentum");
+	ClearConfig("EnforcerReloadTime");
+	ClearConfig("EnforcerReloadTimeAlt");
+	ClearConfig("EnforcerReloadTimeRepeat");
+	ClearConfig("EnforcerUseReducedHitbox");
+	ClearConfig("EnforcerAllowDouble");
+	ClearConfig("EnforcerDamageDouble");
+	ClearConfig("EnforcerMomentumDouble");
+	ClearConfig("EnforcerShotOffsetDouble");
+	ClearConfig("EnforcerReloadTimeDouble");
+	ClearConfig("EnforcerReloadTimeAltDouble");
+	ClearConfig("EnforcerReloadTimeRepeatDouble");
+	ClearConfig("HammerSelectTime");
+	ClearConfig("HammerDownTime");
+	ClearConfig("HammerDamage");
+	ClearConfig("HammerMomentum");
+	ClearConfig("HammerSelfDamage");
+	ClearConfig("HammerSelfMomentum");
+	ClearConfig("HammerAltDamage");
+	ClearConfig("HammerAltMomentum");
+	ClearConfig("HammerAltSelfDamage");
+	ClearConfig("HammerAltSelfMomentum");
+	ClearConfig("TranslocatorSelectTime");
+	ClearConfig("TranslocatorOutSelectTime");
+	ClearConfig("TranslocatorDownTime");
+	ClearConfig("TranslocatorHealth");
+	ClearConfig("TranslocatorCompensatePing");
+	ClearConfig("DefaultWeaponClass");
+	if (Mode != 2) ClearConfig("InvisibilityDuration");
+	if (Mode != 2) ClearConfig("ShieldBeltCharge");
+	if (Mode != 2) ClearConfig("ArmorCharge");
+	if (Mode != 2) ClearConfig("ThighPadsCharge");
+	if (Mode != 2) ClearConfig("HealthPackHealingAmount");
+}
 
 defaultproperties
 {
@@ -383,6 +560,7 @@ defaultproperties
 	bEnableSubTickCompensation=False
 
 	bEnablePreciseRewindTime=False
+	bEnableTrades=False
 	PreciseRewindTimeMaxDeviationMs=60
 	
 	PingCompensationMax=200

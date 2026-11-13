@@ -30,6 +30,8 @@ var vector IGPlus_LiftExitShift; // left a moving lift: moved to the server's sp
 var float IGPlus_LiftExitVelZ;
 // Precise Rewind Time: what our last frame showed (bbPlayer.SendSavedMove).
 var int IGPlus_PRTData;
+// The eye height this move's hitscan shot was traced from (bbPlayer.IGPlus_EyePack). 0: none.
+var int IGPlus_ShotEye;
 
 function Clear2() {
     Clear();
@@ -39,6 +41,7 @@ function Clear2() {
     bIGPlusTloc = false;
     IGPlus_LiftExitShift = vect(0,0,0);
     IGPlus_LiftExitVelZ = 0.0;
+    IGPlus_ShotEye = 0;
     JumpIndex = -1;
     DodgeIndex = -1;
     RunChangeIndex = -1;

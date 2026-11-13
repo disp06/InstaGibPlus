@@ -110,6 +110,39 @@ function IGPlus_WeaponImplementation GetWeaponImpl() {
 	return WImp;
 }
 
+// The ini section this match's weapon settings come from, "" without a
+// weapon mutator.
+function string IGPlus_WeaponSettingsName() {
+	local IGPlus_WeaponImplementation W;
+
+	W = GetWeaponImpl();
+	if (W == none || W.WeaponSettings == none)
+		return "";
+	return string(W.WeaponSettings.Name);
+}
+
+// What the players get as their damage number mode. NextIG shows none,
+// whatever the server setting says: every hit there is a kill.
+function int IGPlus_DamageNumberMode() {
+	if (IGPlus_WeaponSettingsMode() == 1)
+		return 0;
+	return int(Settings.ShowDamageNumberMode);
+}
+
+// Which weapon mutator runs, for the menu's Weapon tab: 0 every weapon
+// (ST_Mutator or none), 1 NextIG, 2 NextSA.
+function byte IGPlus_WeaponSettingsMode() {
+	local Mutator M;
+
+	for (M = Level.Game.BaseMutator; M != none; M = M.NextMutator) {
+		if (NextIG(M) != none)
+			return 1;
+		if (NextSA(M) != none)
+			return 2;
+	}
+	return 0;
+}
+
 function string GetAllOptions() {
 	local string O;
 	local int Pos;
@@ -421,7 +454,7 @@ function xxReplaceTeamInfo()
 // TICK!!! And it's not the bug kind. Sorta :/
 event Tick(float zzDelta)
 {
-	local bool zzb, zzbDoShot;
+	local bool zzbDoShot;
 	local Pawn zzP;
 	local bbPlayer zzbP;
 	local bbCHSpectator zzbS;
@@ -462,10 +495,6 @@ event Tick(float zzDelta)
 		// Make sure first blood doesn't get triggered during warmup
 	}
 
-	// Cause clients to force an actor check.
-	if (Settings.ForceSettingsLevel > 2 && rand(5000) == 0)
-		zzb = True;
-
 	// The match is over: each player's counts ([DET-SUMMARY]).
 	if (Level.Game.bGameEnded && IGPlus_bDetSummariesDone == false) {
 		IGPlus_bDetSummariesDone = true;
@@ -500,8 +529,6 @@ event Tick(float zzDelta)
 				if (zzbP.zzNetspeedChanges > 5)			// Netspeed change protection
 					zzbP.xxServerCheater("NC");
 			}
-			if (zzb)
-				zzbP.zzForceSettingsLevel++;
 			if (zzbP.zzKickReady > 100)				// Spam protection
 				zzbP.xxServerCheater("SK");
 			if (zzbDoShot)
@@ -1060,7 +1087,6 @@ function ModifyPlayer(Pawn Other)
 			zzP.zzCVDelay = Settings.CenterViewDelay;
 			zzP.zzCVDeny = !Settings.bAllowCenterView;
        		zzP.zzbNoMultiWeapon = !Settings.bAllowMultiWeapon;
-			zzP.zzForceSettingsLevel = Settings.ForceSettingsLevel;
 			if (zzDMP.CountDown < 1) {
 				// only set on first spawn after warmup
 				zzP.zzbForceDemo = Settings.bForceDemo;
@@ -1307,7 +1333,6 @@ function string IGPlus_NormalizeServerSettingKey(string Key) {
 	if (Key ~= "bEnableWarpFix") return "bEnableWarpFix";
 	if (Key ~= "MinClientRate") return "MinClientRate";
 	if (Key ~= "MaxClientRate") return "MaxClientRate";
-	if (Key ~= "ForceSettingsLevel") return "ForceSettingsLevel";
 	if (Key ~= "ShowTouchedPackage") return "ShowTouchedPackage";
 	if (Key ~= "HitFeedbackMode") return "HitFeedbackMode";
 	if (Key ~= "ShowDamageNumberMode") return "ShowDamageNumberMode";
@@ -1350,7 +1375,6 @@ function IGPlus_ApplyServerSettingsToPlayers() {
 			BP.IGPlus_PredictedDiscBoost = Settings.bEnablePredictedDiscBoost;
 			BP.zzMinimumNetspeed = Settings.MinClientRate;
 			BP.zzMaximumNetspeed = Settings.MaxClientRate;
-			BP.zzForceSettingsLevel = Settings.ForceSettingsLevel;
 			BP.zzbNoMultiWeapon = !Settings.bAllowMultiWeapon;
 			bOldSnap = BP.IGPlus_EnableSnapshotInterpolation;
 			BP.IGPlus_EnableSnapshotInterpolation = Settings.bEnableSnapshotInterpolation;
@@ -1358,13 +1382,13 @@ function IGPlus_ApplyServerSettingsToPlayers() {
 				BP.IGPlus_SnapInterp_ServerNextTime = 0;
 				BP.IGPlus_SnapInterp_ServerHasLast = false;
 			}
-			BP.ShowDamageNumberMode = int(Settings.ShowDamageNumberMode);
+			BP.ShowDamageNumberMode = IGPlus_DamageNumberMode();
 			continue;
 		}
 
 		BS = bbCHSpectator(P);
 		if (BS != None) {
-			BS.ShowDamageNumberMode = int(Settings.ShowDamageNumberMode);
+			BS.ShowDamageNumberMode = IGPlus_DamageNumberMode();
 		}
 	}
 }
@@ -1423,6 +1447,7 @@ function string IGPlus_NormalizeWeaponSettingKey(string Key) {
 	if (Key ~= "bEnablePingCompensation") return "bEnablePingCompensation";
 	if (Key ~= "bEnableSubTickCompensation") return "bEnableSubTickCompensation";
 	if (Key ~= "bEnablePreciseRewindTime") return "bEnablePreciseRewindTime";
+	if (Key ~= "bEnableTrades") return "bEnableTrades";
 	if (Key ~= "PreciseRewindTimeMaxDeviationMs") return "PreciseRewindTimeMaxDeviationMs";
 	if (Key ~= "PingCompensationMax") return "PingCompensationMax";
 	if (Key ~= "bEnableAnimationAdaptiveHeadHitbox") return "bEnableAnimationAdaptiveHeadHitbox";
@@ -1608,7 +1633,7 @@ function IGPlus_SetWeaponSetting(PlayerPawn Sender, string Key, string Value, op
 	}
 
 	WImp.WeaponSettings.SetPropertyText(NormalKey, Value);
-	WImp.WeaponSettings.SaveConfig();
+	WImp.SaveWeaponSettings();
 	IGPlus_ApplyWeaponSettings();
 	if (bSendFeedback)
 		Sender.ClientMessage(NormalKey$"="$WImp.WeaponSettings.GetPropertyText(NormalKey));

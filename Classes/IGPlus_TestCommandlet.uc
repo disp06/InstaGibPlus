@@ -203,6 +203,65 @@ function TestTradeReach() {
 		"TradeReach_standing_still_stays_under_150uu_in_0.1s");
 }
 
+// A shot's eye height and its move's time share one int (bbPlayer.SendSavedMove).
+function TestShotEyePacking() {
+	local int P;
+
+	LogTestResult(class'bbPlayer'.static.IGPlus_EyeUnpack(class'bbPlayer'.static.IGPlus_EyePack(27.0)) == 27.0,
+		"ShotEye_default_eye_height_survives");
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_EyeUnpack(class'bbPlayer'.static.IGPlus_EyePack(12.37)) - 12.37) <= 0.25,
+		"ShotEye_is_within_a_quarter_unit");
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_EyeUnpack(class'bbPlayer'.static.IGPlus_EyePack(-14.85)) + 14.85) <= 0.25,
+		"ShotEye_below_the_body_centre_survives");
+	LogTestResult(class'bbPlayer'.static.IGPlus_EyePack(-500.0) == 1 && class'bbPlayer'.static.IGPlus_EyePack(500.0) == 255,
+		"ShotEye_clamps_and_is_never_zero");
+	P = class'bbPlayer'.static.IGPlus_PackDeltaEye(0.016, 150);
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_UnpackDelta(P) - 0.016) < 0.00002 && (P >>> 24) == 150 && (P & 0xFF) == 0,
+		"MoveDelta_and_eye_unpack_apart");
+	P = class'bbPlayer'.static.IGPlus_PackDeltaEye(0.4, 255);
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_UnpackDelta(P) - 0.4) < 0.00002 && (P >>> 24) == 255,
+		"MoveDelta_longest_frame_with_highest_eye");
+	P = class'bbPlayer'.static.IGPlus_PackDeltaEye(5.0, 0);
+	LogTestResult(class'bbPlayer'.static.IGPlus_UnpackDelta(P) < 1.0 && class'bbPlayer'.static.IGPlus_UnpackDelta(P) > 0.999 && (P >>> 24) == 0,
+		"MoveDelta_clamps_under_a_second_and_leaves_the_eye_alone");
+}
+
+// Where the client's own trace stands another player (bbPlayer.IGPlus_PRTRulePos).
+function TestPRTRulePos() {
+	LogTestResult(VSize(class'bbPlayer'.static.IGPlus_PRTRulePos(vect(100,200,300), vect(400,0,-100), 0.02, false) - vect(108,200,298)) < 0.001,
+		"PRTRule_carries_the_update_on_by_its_velocity");
+	LogTestResult(class'bbPlayer'.static.IGPlus_PRTRulePos(vect(100,200,300), vect(400,0,0), 0.0, false) == vect(100,200,300),
+		"PRTRule_no_time_past_the_update_is_the_update");
+	LogTestResult(VSize(class'bbPlayer'.static.IGPlus_PRTRulePos(vect(0,0,0), vect(1000,0,0), 5.0, false) - vect(200,0,0)) < 0.001,
+		"PRTRule_carry_is_capped_at_200ms");
+	LogTestResult(class'bbPlayer'.static.IGPlus_PRTRulePos(vect(7,8,9), vect(1000,0,0), 0.5, true) == vect(7,8,9),
+		"PRTRule_a_held_player_stays_at_the_update");
+	// Update and tick counter came in one frame, 4 ms before the shown frame.
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.004, 10.0, 500, 500, 0.004) - 0.004) < 0.00001,
+		"PRTRuleAge_together_is_the_reported_age");
+	// The counter is a tick ahead of the update we have: carried for its own time.
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.014, 10.0, 501, 500, 0.0) - 0.014) < 0.00001,
+		"PRTRuleAge_counter_a_tick_ahead_carries_the_update_on");
+	// Our update is newer than the shown tick: carried for its own, shorter time.
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.002, 10.0, 499, 500, 0.016) - 0.002) < 0.00001,
+		"PRTRuleAge_update_ahead_of_the_counter");
+	// No update for three ticks: the server has the player still at it.
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTRuleAge(10.040, 10.0, 503, 500, 0.003) - 0.003) < 0.00001,
+		"PRTRuleAge_a_stalled_player_gets_the_reported_age");
+	LogTestResult(class'bbPlayer'.static.IGPlus_PRTRuleAge(9.9, 10.0, 500, 500, 0.0) == 0.0,
+		"PRTRuleAge_never_negative");
+	LogTestResult(class'bbPlayer'.static.IGPlus_Fmt1(12.34) == "12.3" && class'bbPlayer'.static.IGPlus_Fmt1(-0.26) == "-0.3"
+		&& class'bbPlayer'.static.IGPlus_Fmt1(-0.04) == "0.0" && class'bbPlayer'.static.IGPlus_Fmt1(7.96) == "8.0",
+		"Fmt1_one_decimal_with_sign");
+	// A line along X at height 0. A body 20 to the side with radius 17 is 3 away.
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_LineCylinderGap(vect(0,0,0), vect(1,0,0), vect(500,20,0), 17, 39) - 3.0) < 0.001,
+		"LineCylinderGap_side");
+	LogTestResult(class'bbPlayer'.static.IGPlus_LineCylinderGap(vect(0,0,0), vect(1,0,0), vect(500,10,30), 17, 39) == 0.0,
+		"LineCylinderGap_inside_is_zero");
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_LineCylinderGap(vect(0,0,0), vect(1,0,0), vect(500,0,50), 17, 39) - 11.0) < 0.001,
+		"LineCylinderGap_above");
+}
+
 event int main(string Params) {
 	TestDataBuffer();
 	TestDetEffectiveAnimTime();
@@ -210,5 +269,7 @@ event int main(string Params) {
 	TestDetFireClockLead();
 	TestPreciseRewindTimeReport();
 	TestTradeReach();
+	TestShotEyePacking();
+	TestPRTRulePos();
 	return 0;
 }

@@ -32,9 +32,6 @@ var config int    SkinTeamIndexMap[16];
 var config bool   bSkinEnemyUseIndexMap;
 var config bool   bSkinTeamUseIndexMap;
 var config bool   bUnlitSkins;
-var config int    HitSound;     // if Client wishes hitsounds (default 2, must be enabled on server)
-var config int    TeamHitSound; // if Client wishes team hitsounds (default 3, must be enabled on server)
-var config bool   bDisableForceHitSounds;
 var config bool   bEnableHitSounds;
 var config bool   bEnableTeamHitSounds;
 var config bool   bHitSoundPitchShift;
@@ -364,9 +361,6 @@ simulated function string DumpSettings() {
 		GetSetting("bSkinEnemyUseIndexMap")$
 		GetSetting("bSkinTeamUseIndexMap")$
 		GetSetting("bUnlitSkins")$
-		GetSetting("HitSound")$
-		GetSetting("TeamHitSound")$
-		GetSetting("bDisableForceHitSounds")$
 		GetSetting("bEnableHitSounds")$
 		GetSetting("bEnableTeamHitSounds")$
 		GetSetting("bHitSoundPitchShift")$
@@ -460,9 +454,6 @@ defaultproperties
 {
 	bForceModels=False
 	bDemoShowRealModels=True
-	HitSound=2
-	TeamHitSound=3
-	bDisableForceHitSounds=False
 	bTeamInfo=True
 	bDoEndShot=False
 	bAutoDemo=False

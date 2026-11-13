@@ -143,14 +143,64 @@ simulated function HandleDetClientFire(rotator StepView, vector StepLoc) {
 		BP.PlayRecoil(FiringSpeed);
 	if (Affector != none)
 		Affector.FireEffect();
+	// As stock's ClientFire, which a deterministic shot does not go through.
+	BP.ShakeView(ShakeTime, ShakeMag, ShakeVert);
 
 	PlayFiring();
 
-	if (P != none && BP.ClientWeaponSettingsData.bSniperUseClientSideAnimations) {
+	if (P != none && IGPlus_ClientAnims(BP)) {
 		yModInit();
 		GetAxes(GV, X, Y, Z);
 		DoClientShellCase(P, Owner.Location + CalcDrawOffset() + 30 * X + (2.8 * yMod + 5.0) * Y - Z * 1, X, Y, Z);
 	}
+	// The eye height goes to the server with the shot, so its trace starts on
+	// the crosshair's line (bbPlayer.IGPlus_ClientShotEye).
+	BP.IGPlus_ClientShotEye();
+	if (IGPlus_InstantHitFeedback())
+		ClientTraceFire(StepView, StepLoc);
+}
+
+// The client-side shell case and muzzle flash. A client setting here.
+// NextSA's rifle always has them (SA_SniperRifle).
+simulated function bool IGPlus_ClientAnims(bbPlayer BP) {
+	return BP != None && BP.ClientWeaponSettingsData.bSniperUseClientSideAnimations;
+}
+
+// Does the shooter's own trace play the hit sound and marker at the click?
+// Only NextSA's rifle (SA_SniperRifle): the server's hit message is matched
+// to the shot by time, which needs this to be the only weapon carried.
+simulated function bool IGPlus_InstantHitFeedback() {
+	return false;
+}
+
+// Client: our own trace of this shot, against the other players where the
+// server will test them and by its hitbox rule (bbPlayer.IGPlus_ClientShotTrace). A hit plays the hit
+// sound and marker now, and the verdict goes to the server with the shot's
+// move (bbPlayer.IGPlus_ClientShotVerdict). The server's trace still decides.
+simulated function ClientTraceFire(rotator AimRot, vector AimLoc) {
+	local vector HitLocation, HitNormal, HitOffset, StartTrace, EndTrace, X;
+	local Actor Other;
+	local bbPlayer bbP;
+	local WeaponSettingsRepl WS;
+	local IGPlus_WeaponImplementationBase WB;
+
+	bbP = bbPlayer(Owner);
+	WS = GetWeaponSettings();
+	if (bbP == None || WS == None)
+		return;
+
+	X = vector(AimRot);
+	StartTrace = AimLoc + bbP.IGPlus_ClientShotEye() * vect(0,0,1);
+	EndTrace = StartTrace + 100000 * X;
+	if (WS.SniperUseReducedHitbox)
+		WB = bbP.IGPlus_GetWeaponImplementationBase();
+
+	Other = bbP.IGPlus_ClientShotTrace(HitLocation, HitNormal, HitOffset, EndTrace, StartTrace, WB);
+
+	if (bbP.IGPlus_bShotHead)
+		bbP.IGPlus_ClientShotVerdict(Other, WS.SniperHeadshotDamage, AltDamageType, true);
+	else
+		bbP.IGPlus_ClientShotVerdict(Other, WS.SniperDamage, MyDamageType, false);
 }
 
 function HandleDetServerFire(rotator StepView, vector StepLoc) {
@@ -237,7 +287,7 @@ simulated function bool ClientFire(float Value)
 
 	if (bbP != None && GetWeaponSettings().bEnablePingCompensation)
 	{
-		if (Role < ROLE_Authority && bbP.ClientWeaponSettingsData.bSniperUseClientSideAnimations)
+		if (Role < ROLE_Authority && IGPlus_ClientAnims(bbP))
 		{
 			if (bbP.ClientCannotShoot() || bbP.Weapon != Self) {
 					return false;
@@ -305,7 +355,11 @@ function TraceFireAt(rotator AimRot, vector BaseLoc, bool bUseAdjustAim) {
 
 	Owner.MakeNoise(PawnOwner.SoundDampening);
 	GetAxes(AimRot,X,Y,Z);
-	StartTrace = BaseLoc + PawnOwner.Eyeheight * vect(0,0,1);
+	// A deterministic shot starts at the eye height its client traced from.
+	if (bUseAdjustAim == false && bbPlayer(PawnOwner) != None)
+		StartTrace = BaseLoc + bbPlayer(PawnOwner).IGPlus_ServerShotEye() * vect(0,0,1);
+	else
+		StartTrace = BaseLoc + PawnOwner.Eyeheight * vect(0,0,1);
 	if (WImp != None && WImp.WeaponSettings.bEnablePingCompensation)
 	{
 		RewindMs = WImp.IGPlus_GetHitscanRewindMs(PawnOwner);
@@ -321,6 +375,13 @@ function TraceFireAt(rotator AimRot, vector BaseLoc, bool bUseAdjustAim) {
 		Other = WImp.TraceShot(HitLocation, HitNormal, EndTrace, StartTrace, PawnOwner);
 	else
 		Other = PawnOwner.TraceShot(HitLocation, HitNormal, EndTrace, StartTrace);
+	// A deterministic shot against the shooter's own trace, before the damage.
+	if (bUseAdjustAim == false && bbPlayer(PawnOwner) != None) {
+		if (Other == None)
+			HitLocation = EndTrace;
+		bbPlayer(PawnOwner).IGPlus_HitCompare(
+			Other, Pawn(Other) != None && CheckHeadShot(Pawn(Other), HitLocation, X), StartTrace, X, HitLocation);
+	}
 	ProcessTraceHit(Other, HitLocation, HitNormal, X,Y,Z);
 }
 
@@ -338,7 +399,7 @@ function ProcessTraceHit(Actor Other, Vector HitLocation, Vector HitNormal, Vect
 	// Only spawn shell case on server if compensation is disabled and if player
 	if (bbP != None)
 	{
-		if(WImp.WeaponSettings.bEnablePingCompensation && bbP.ClientWeaponSettingsData.bSniperUseClientSideAnimations) {
+		if(WImp.WeaponSettings.bEnablePingCompensation && IGPlus_ClientAnims(bbP)) {
 			s = Spawn(class'ST_UT_ShellCaseOwnerHidden',Owner, '', Owner.Location + CalcDrawOffset() + 30 * X + (2.8 * FireOffset.Y+5.0) * Y - Z * 1);
 
 			s.RemoteRole = ROLE_None;
@@ -519,7 +580,7 @@ simulated function PlayFiring() {
 	if ((PlayerPawn(Owner) != None) && 
 		(PlayerPawn(Owner).DesiredFOV == PlayerPawn(Owner).DefaultFOV)) {
 		// If compensation is enabled, only show muzzle flash on client side
-		if (!bbPlayer(Owner).ClientWeaponSettingsData.bSniperUseClientSideAnimations || 
+		if (!IGPlus_ClientAnims(bbPlayer(Owner)) || 
 			(Level.NetMode == NM_Standalone) || 
 			(PlayerPawn(Owner).RemoteRole != ROLE_AutonomousProxy)) {
 			bMuzzleFlash++;
