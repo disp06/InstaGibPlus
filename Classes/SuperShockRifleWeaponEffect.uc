@@ -1,6 +1,11 @@
 class SuperShockRifleWeaponEffect extends WeaponEffect
 	abstract;
 
+// Which parts this effect draws. SuperShockRifleBeamEffect draws the beam
+// only and SuperShockRifleRingEffect the ring only, for a shooter whose Hit
+// Effect Source is Server (ST_SuperShockRifle.ClientTraceFire).
+var bool bPlayBeam, bPlayRing;
+
 static function Play(
 	PlayerPawn Player,
 	ClientSettings Settings,
@@ -29,8 +34,10 @@ static function Play(
 		HitLocation = TargetLocation;
 	}
 
-	PlayBeam(Player, Settings, SourcePRI, SmokeLocation, HitLocation, HitNormal);
-	PlayRing(Player, Settings, SourcePRI, HitLocation, HitNormal);
+	if (default.bPlayBeam)
+		PlayBeam(Player, Settings, SourcePRI, SmokeLocation, HitLocation, HitNormal);
+	if (default.bPlayRing)
+		PlayRing(Player, Settings, SourcePRI, HitLocation, HitNormal);
 }
 
 static function PlayBeam(
@@ -147,4 +154,10 @@ static function PlayRing(
 			}
 			breaK;
 	}
+}
+
+defaultproperties
+{
+	bPlayBeam=True
+	bPlayRing=True
 }

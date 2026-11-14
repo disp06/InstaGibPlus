@@ -271,6 +271,10 @@ var localized string MoreInformationText;
 	var localized string SSRRingTypeDefault;
 	var localized string SSRRingTypeTeamColored;
 
+	var IGPlus_ComboBox Cmb_HitEffectSource;
+	var localized string HitEffectSourceText;
+	var localized string HitEffectSourceHelp;
+
 // FPS
 	var UWindowLabelControl Lbl_FPS;
 	var localized string FPSLblText;
@@ -995,6 +999,8 @@ function Created() {
 	Cmb_SSRRingType.AddItem(SSRRingTypeNone);
 	Cmb_SSRRingType.AddItem(SSRRingTypeDefault);
 	Cmb_SSRRingType.AddItem(SSRRingTypeTeamColored);
+	Cmb_HitEffectSource = CreateComboBox(HitEffectSourceText, HitEffectSourceHelp, false, 150);
+	SetUpHitSourceComboBox(Cmb_HitEffectSource);
 
 	Lbl_FPS = CreateSeparator(FPSLblText);
 	HSld_FPSDetail = CreateSlider(-1, 3, 1, FPSDetailText, FPSDetailHelp, 150);
@@ -1160,6 +1166,7 @@ function Load() {
 	Cmb_BeamOriginMode.SetSelectedIndex(Clamp(Settings.BeamOriginMode, 0, 1));
 	Cmb_BeamDestinationMode.SetSelectedIndex(Clamp(Settings.BeamDestinationMode, 0, 1));
 	Cmb_SSRRingType.SetSelectedIndex(Clamp(Settings.SSRRingType, 0, 2));
+	Cmb_HitEffectSource.SetSelectedIndex(Clamp(Settings.HitEffectSource, 0, 1));
 
 	if (Settings.bShowFPS)
 		HSld_FPSDetail.SetValue(Settings.FPSDetail);
@@ -1385,6 +1392,7 @@ function Save() {
 	Settings.BeamOriginMode = Cmb_BeamOriginMode.GetSelectedIndex();
 	Settings.BeamDestinationMode = Cmb_BeamDestinationMode.GetSelectedIndex();
 	Settings.SSRRingType = Cmb_SSRRingType.GetSelectedIndex();
+	Settings.HitEffectSource = Settings.IntToHitEffectSource(Cmb_HitEffectSource.GetSelectedIndex());
 
 	if (HSld_FPSDetail.GetValue() == -1)
 		Settings.bShowFPS = false;
@@ -1684,6 +1692,9 @@ defaultproperties
 
 		SSRRingTypeText="Impact Effect"
 		SSRRingTypeHelp="Decides what effects to play where SSR shots end"
+
+		HitEffectSourceText="Hit Effect Source"
+		HitEffectSourceHelp="Controls when the impact effect of your InstaGib rifle shows on a player you hit\\nServer --> Only for hits the server counted, but delayed by ping\\nClient --> Instantly, but may not be accurate\\nYour beam always shows at once. Only for the rifle of NextIG"
 
 		SSRRingTypeNone="Nothing"
 		SSRRingTypeDefault="Default"

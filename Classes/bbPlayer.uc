@@ -427,6 +427,14 @@ var vector IGPlus_PSAPushDV[8];
 var int IGPlus_PSAPushNext;
 var vector IGPlus_PSALastClientLoc;
 var float IGPlus_PSALastClientTS;
+// Server: for the shot being run, how far the client's own spot was from ours
+// when it fired (-1: not known), and which of the two the shot left from
+// (IGPlus_PSAShotOrigin). 0 ours, 1 the client's because the two were close,
+// 2 the client's after a push it had not seen.
+var float IGPlus_ShotOriginGap;
+var int IGPlus_ShotOriginFrom;
+var int IGPlus_HitStatOriginFar;     // rifle and sniper shots fired while the two were further apart than close
+var float IGPlus_HitStatOriginGapMax;
 
 struct ServerMoveParams {
 	var vector Location;
@@ -507,6 +515,8 @@ var float IGPlus_PendPRTNoteTS, IGPlus_PendPRTSeenTime, IGPlus_PendPRTViewTime, 
 var int IGPlus_PendPRTNoteTick;
 var string IGPlus_PendPRTReason;
 var int IGPlus_PendVerdict, IGPlus_PendEyeByte;
+var float IGPlus_PendShotOriginGap;
+var int IGPlus_PendShotOriginFrom;
 var bool IGPlus_bPendPRTInterp, IGPlus_bPendPRTInterpPast, IGPlus_bPendPRTInterpHeld;
 var float IGPlus_PendPRTInterpR;
 var int IGPlus_PendPRTInterpSpan;
@@ -525,6 +535,12 @@ var int IGPlus_PingRingAt;
 // height: more than shake and smoothing make, little for a client that lies).
 const IGPLUS_EYE_MAX_DIFF = 24.0;
 var int IGPlus_ShotEyeByte;       // client: the last shot's, until its move takes it. Server: the running move's. 0: none
+// Client, Hit Effect Source on Server: the ring that waits for the server's
+// hit message (IGPlus_RingHold, IGPlus_RingConfirm).
+var PlayerReplicationInfo IGPlus_RingVictimPRI;
+var vector IGPlus_RingSourceLoc, IGPlus_RingSourceOffset, IGPlus_RingLoc, IGPlus_RingNormal;
+var float IGPlus_RingTS;
+const IGPLUS_RING_WAIT = 2.0;     // seconds a ring waits for the server's word
 var float IGPlus_ShotEyeDiff;     // server: the client's eye minus ours for the shot being run
 var bool IGPlus_bShotEyeRefused;  // server: that shot's eye was too far from ours
 var int IGPlus_HitStatEyeUsed, IGPlus_HitStatEyeRefused;
@@ -3430,9 +3446,11 @@ function vector IGPlus_PSAShotOrigin(IGPlus_ServerMove SM, float PrevTS, int Mer
 	local vector ClientStart, Gap, Expected;
 	local float ShotTS, Age, MaxAge, Drift, Window, Slack;
 	local int i;
+	local bool bExact;
 
-	if ((IGPlus_PushSafeAim == false && IsInState('Dying') == false)
-		|| MergeCount != 0 || Mover(SM.ClientBase) != none)
+	IGPlus_ShotOriginGap = -1.0;
+	IGPlus_ShotOriginFrom = 0;
+	if (MergeCount != 0 || Mover(SM.ClientBase) != none)
 		return Location;
 
 	ClientStart = SM.ClientLocation - SM.ClientVelocity * SM.MoveDeltaTime;
@@ -3441,14 +3459,28 @@ function vector IGPlus_PSAShotOrigin(IGPlus_ServerMove SM, float PrevTS, int Mer
 	// Exact when the previous move (and nothing between) reported it.
 	if (IGPlus_PSALastClientTS == PrevTS
 		&& Abs(SM.TimeStamp - PrevTS - SM.MoveDeltaTime) < 0.5 * SM.MoveDeltaTime
-		&& VSize(IGPlus_PSALastClientLoc - ClientStart) < 4.0)
+		&& VSize(IGPlus_PSALastClientLoc - ClientStart) < 4.0) {
 		ClientStart = IGPlus_PSALastClientLoc;
+		bExact = true;
+	}
 
 	if (IsInState('Dying'))
 		return IGPlus_TradeShotOrigin(SM, ClientStart);
 
 	Gap = Location - ClientStart;
-	if (VSize(Gap) < 0.5)
+	IGPlus_ShotOriginGap = VSize(Gap);
+	// Close: the shot leaves from the client's spot. Its screen fired from
+	// there, and we take that spot for its movement without a correction
+	// (xxServerMove's MaxLocError). From our own spot a beam that grazed a
+	// player by less than the gap could hit on its screen and miss here.
+	// Only where the move before this one reported that spot: worked back
+	// from this move's end it can be off by more than the gap at a low
+	// frame rate.
+	if (bExact && IGPlus_ShotOriginIsNear(IGPlus_ShotOriginGap)) {
+		IGPlus_ShotOriginFrom = 1;
+		return ClientStart;
+	}
+	if (IGPlus_PushSafeAim == false || IGPlus_ShotOriginGap < 0.5)
 		return Location;
 
 	ShotTS = SM.TimeStamp - SM.MoveDeltaTime;
@@ -3476,7 +3508,15 @@ function vector IGPlus_PSAShotOrigin(IGPlus_ServerMove SM, float PrevTS, int Mer
 		|| IGPlus_PSAClear(ClientStart + BaseEyeHeight * vect(0,0,1), Location + BaseEyeHeight * vect(0,0,1)) == false)
 		return Location;
 
+	IGPlus_ShotOriginFrom = 2;
 	return ClientStart;
+}
+
+// The client's own spot counts as ours for a shot when the two are no
+// further apart than the movement code lets them be without a correction:
+// MaxLocError is 3.0 for the square of the distance.
+static function bool IGPlus_ShotOriginIsNear(float Gap) {
+	return Gap >= 0.0 && Gap * Gap <= 3.0;
 }
 
 // A trade (bEnableAllWeaponTrades), server: the dead client fired from where
@@ -5318,6 +5358,7 @@ function IGPlus_DetLogSummary() {
 		@"fireShared="$IGPlus_StatFireShared@"fireMoved="$IGPlus_StatFireMoved
 		@"eyeUsed="$IGPlus_HitStatEyeUsed@"eyeRefused="$IGPlus_HitStatEyeRefused
 		@"eyeDiffAvg="$EyeAvg@"eyeDiffMax="$IGPlus_HitStatEyeDiffMax
+		@"originFar="$IGPlus_HitStatOriginFar@"originGapMax="$IGPlus_HitStatOriginGapMax
 		@"ping="$PlayerReplicationInfo.Ping@"lostMoves="$IGPlus_DetLostMoves);
 }
 
@@ -6853,6 +6894,8 @@ function bool IGPlus_QueueShot(Weapon W, rotator View, vector Loc) {
 	IGPlus_PendVerdict = IGPlus_ClientHitVerdict;
 	IGPlus_bPendDrawnDiffers = IGPlus_bShotDrawnDiffers;
 	IGPlus_PendEyeByte = IGPlus_ShotEyeByte;
+	IGPlus_PendShotOriginGap = IGPlus_ShotOriginGap;
+	IGPlus_PendShotOriginFrom = IGPlus_ShotOriginFrom;
 	return true;
 }
 
@@ -6861,10 +6904,10 @@ function bool IGPlus_QueueShot(Weapon W, rotator View, vector Loc) {
 function IGPlus_RunPendingShot() {
 	local Weapon W;
 	local float NoteTS, SeenTime, ViewTime, LagMs;
-	local int NoteTick, Verdict, EyeByte, InterpSpan;
+	local int NoteTick, Verdict, EyeByte, InterpSpan, OriginFrom;
 	local string Reason;
 	local bool bDrawnDiffers, bInterp, bInterpPast, bInterpHeld;
-	local float InterpR;
+	local float InterpR, OriginGap;
 
 	if (IGPlus_bShotPending == false)
 		return;
@@ -6898,6 +6941,8 @@ function IGPlus_RunPendingShot() {
 	Verdict = IGPlus_ClientHitVerdict;
 	bDrawnDiffers = IGPlus_bShotDrawnDiffers;
 	EyeByte = IGPlus_ShotEyeByte;
+	OriginGap = IGPlus_ShotOriginGap;
+	OriginFrom = IGPlus_ShotOriginFrom;
 
 	IGPlus_PRTNoteTS = IGPlus_PendPRTNoteTS;
 	IGPlus_PRTNoteTick = IGPlus_PendPRTNoteTick;
@@ -6913,6 +6958,8 @@ function IGPlus_RunPendingShot() {
 	IGPlus_ClientHitVerdict = IGPlus_PendVerdict;
 	IGPlus_bShotDrawnDiffers = IGPlus_bPendDrawnDiffers;
 	IGPlus_ShotEyeByte = IGPlus_PendEyeByte;
+	IGPlus_ShotOriginGap = IGPlus_PendShotOriginGap;
+	IGPlus_ShotOriginFrom = IGPlus_PendShotOriginFrom;
 
 	if (ST_SuperShockRifle(W) != None)
 		ST_SuperShockRifle(W).DeterministicTraceFire(IGPlus_PendShotView, IGPlus_PendShotLoc);
@@ -6933,6 +6980,8 @@ function IGPlus_RunPendingShot() {
 	IGPlus_ClientHitVerdict = Verdict;
 	IGPlus_bShotDrawnDiffers = bDrawnDiffers;
 	IGPlus_ShotEyeByte = EyeByte;
+	IGPlus_ShotOriginGap = OriginGap;
+	IGPlus_ShotOriginFrom = OriginFrom;
 }
 
 // Server, every tick (ServerTick), for every player.
@@ -7838,6 +7887,43 @@ simulated function IGPlus_ClientShotVerdict(Actor Other, float Damage, name Dama
 	class'bbPlayerStatics'.static.PlayClientHitResponse(self, Victim, Damage, DamageType);
 }
 
+// Client, Hit Effect Source on Server: our beam ended on this player at the
+// click and its ring waits for the server's word. The ring goes where the
+// beam ended, so that spot is worked out now: with Beam Destination Mode on
+// Attached the beam's end is the player's drawn spot plus the hit offset.
+simulated function IGPlus_RingHold(Pawn Victim, vector SourceLocation, vector SourceOffset, vector HitLocation, vector HitOffset, vector HitNormal) {
+	IGPlus_RingVictimPRI = Victim.PlayerReplicationInfo;
+	IGPlus_RingSourceLoc = SourceLocation;
+	IGPlus_RingSourceOffset = SourceOffset;
+	if (Settings != None && Settings.BeamDestinationMode == 1)
+		IGPlus_RingLoc = class'WeaponEffect'.static.GetPlayerLocation(Victim) + HitOffset;
+	else
+		IGPlus_RingLoc = HitLocation;
+	IGPlus_RingNormal = HitNormal;
+	IGPlus_RingTS = Level.TimeSeconds;
+}
+
+// Client: the server's hit message for a hit of ours on this player
+// (IGPlus_HitFeedbackMessage). The ring that waited for it shows now, at the
+// end of the beam. No message, no ring: the server did not count the hit.
+// ponytail: one ring waits at a time. The rifle fires slower than a ping.
+simulated function IGPlus_RingConfirm(PlayerReplicationInfo VictimPRI) {
+	if (IGPlus_RingVictimPRI == None || VictimPRI != IGPlus_RingVictimPRI)
+		return;
+	IGPlus_RingVictimPRI = None;
+	if (Level.TimeSeconds - IGPlus_RingTS > IGPLUS_RING_WAIT * Level.TimeDilation)
+		return;
+	SendWeaponEffect(
+		class'SuperShockRifleRingEffect',
+		PlayerReplicationInfo,
+		IGPlus_RingSourceLoc,
+		IGPlus_RingSourceOffset,
+		None,
+		IGPlus_RingLoc,
+		IGPlus_RingLoc,
+		IGPlus_RingNormal);
+}
+
 // Client: the server's hit message is here (IGPlus_HitFeedbackMessage). Did
 // our own trace already play this hit? One shot, one message: these weapons
 // fire slower than a ping.
@@ -7878,6 +7964,12 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 	// verdict is from the trace on our own rule (IGPlus_ClientShotTrace).
 	bDrawnHit = bClientHit != IGPlus_bShotDrawnDiffers;
 	IGPlus_HitStatShots++;
+	// How far the shooter's own spot was from ours when it fired.
+	if (IGPlus_ShotOriginGap >= 0.0) {
+		if (IGPlus_ShotOriginFrom != 1)
+			IGPlus_HitStatOriginFar++;
+		IGPlus_HitStatOriginGapMax = FMax(IGPlus_HitStatOriginGapMax, IGPlus_ShotOriginGap);
+	}
 	if (IGPlus_bShotDrawnDiffers) {
 		IGPlus_HitStatDrawnDiff++;
 		if (bDrawnHit == bServerHit)
@@ -7975,6 +8067,17 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 	S = S@"eyeDiff="$IGPlus_ShotEyeDiff;
 	if (IGPlus_bShotEyeRefused)
 		S = S@"eyeRefused";
+	// The shooter's own spot against ours when it fired, and which one the
+	// shot left from (IGPlus_PSAShotOrigin).
+	if (IGPlus_ShotOriginGap >= 0.0) {
+		S = S@"originGap="$IGPlus_ShotOriginGap;
+		if (IGPlus_ShotOriginFrom == 1)
+			S = S@"origin=client";
+		else if (IGPlus_ShotOriginFrom == 2)
+			S = S@"origin=push";
+		else
+			S = S@"origin=server";
+	}
 	S = S@"ping="$PlayerReplicationInfo.Ping;
 	// The server log gets the disagreements only.
 	if (bServerHit != bClientHit || IGPlus_bShotDrawnDiffers)

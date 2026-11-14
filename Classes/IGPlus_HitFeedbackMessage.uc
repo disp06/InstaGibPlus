@@ -38,6 +38,11 @@ static function ClientReceive(
 	if ((bInstigator || bViewTarget) == false)
 		return;
 
+	// Hit Effect Source on Server: the server has counted our hit on this
+	// player, so the ring that waited at the end of our beam shows now.
+	if (bInstigator && bbP != none)
+		bbP.IGPlus_RingConfirm(RelatedPRI_1);
+
 	// The Client source only counts while we carry a weapon that plays its own
 	// hit response (bbPlayer.IGPlus_HasClientHitResponse). With any other
 	// weapon nothing would play at all.

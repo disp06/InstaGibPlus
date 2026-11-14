@@ -243,6 +243,7 @@ simulated function bool ClientAltFire(float Value) {
 simulated function ClientTraceFire(rotator AimRot, vector AimLoc) {
 	local vector HitLocation, HitNormal, StartTrace, EndTrace, X, Y, Z;
 	local vector SmokeOffset, HitOffset;
+	local class<WeaponEffect> Effect;
 	local Actor Other;
 	local bbPlayer bbP;
 	local WeaponSettingsRepl WS;
@@ -283,8 +284,20 @@ simulated function ClientTraceFire(rotator AimRot, vector AimLoc) {
 	// verdict for the server's count (bbPlayer.IGPlus_ClientShotVerdict).
 	bbP.IGPlus_ClientShotVerdict(Other, HitDamage, MyDamageType, false);
 
+	// Hit Effect Source on Server: on a player the beam shows now and the
+	// ring only once the server has counted the hit (bbPlayer.IGPlus_RingHold).
+	// A ring on a wall needs no answer and shows now. A ring that still
+	// waits from the shot before is dropped: the server did not count that
+	// hit, and its answer to this shot must not bring that ring back.
+	Effect = class'SuperShockRifleWeaponEffect';
+	bbP.IGPlus_RingVictimPRI = None;
+	if (Pawn(Other) != None && Pawn(Other).PlayerReplicationInfo != None
+		&& bbP.Settings != None && bbP.Settings.HitEffectSource == HESRC_Server) {
+		Effect = class'SuperShockRifleBeamEffect';
+		bbP.IGPlus_RingHold(Pawn(Other), AimLoc + SmokeOffset, SmokeOffset, HitLocation, HitOffset, HitNormal);
+	}
 	bbP.SendWeaponEffect(
-		class'SuperShockRifleWeaponEffect',
+		Effect,
 		bbP.PlayerReplicationInfo,
 		AimLoc + SmokeOffset,
 		SmokeOffset,

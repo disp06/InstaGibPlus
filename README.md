@@ -63,6 +63,7 @@ These settings can be found in **InstaGibPlus.ini** under section **\[ClientSett
 1. [BeamOriginMode](#beamoriginmode)
 1. [BeamDestinationMode](#beamdestinationmode)
 1. [SSRRingType](#ssrringtype)
+1. [HitEffectSource](#hiteffectsource)
 1. [bNoOwnFootsteps](#bnoownfootsteps)
 1. [DesiredNetUpdateRate](#desirednetupdaterate)
 1. [DesiredNetspeed](#desirednetspeed)
@@ -396,6 +397,17 @@ The time the beam's visuals decay over.
 0. No Ring
 1. Default Ring
 2. Team-colored Ring
+
+## HitEffectSource
+**Type: EHitEffectSource**  
+**Default: HESRC_Client**  
+
+When the ring of your InstaGib rifle shows on a player you hit. It applies to the rifle of NextIG. Your beam always shows at the click.
+
+* `HESRC_Client`: the ring shows at the click, where your own trace ended. When the server then counts no hit, the ring was shown for nothing.
+* `HESRC_Server`: the ring shows at the end of your beam once the server has counted the hit, a ping later. It never shows for a hit the server did not count.
+
+A ring on a wall shows at the click with both values. The NewNet rifle is not affected. There the game client decides the hit.
 
 ## bNoOwnFootsteps
 **Type: bool**  
@@ -2099,6 +2111,8 @@ If True, weapon switches start on the client the moment the key is pressed inste
 
 If True, a shot fired right after the shooter was pushed leaves from where the shooter's screen had them, not from where the push had already moved them on the server. Projectiles fired from a moving lift leave from where the shooter saw themselves on the lift, and meet the lift where the shooter saw it. With [bCameraCorrectionSmoothing](#bcameracorrectionsmoothing), shots go through the crosshair while the camera eases out a correction. Requires bEnableInputReplication to be False. The lift part needs the weapon's bEnablePingCompensation.
 
+With this setting on or off, a shot leaves from the spot the shooter's own game client had them at whenever that spot is close to the server's. Close means no further apart than the movement code allows without a correction, about 1.7 units. The shooter's screen fired from there, and from the server's own spot a beam that grazed a player by less than that could hit on the screen and miss on the server. The server's hit line for a player with `enableDebugData 1` has `originGap`, the distance between the two spots, and `origin`, which is `client`, `push` or `server`.
+
 ## bEnablePredictedSelfKnockback
 
 **Type: bool**  
@@ -2348,6 +2362,7 @@ When a match ends or a player leaves, the server writes one `[DET-SUMMARY]` line
 | `eyeUsed` | Rifle and sniper shots the server started at the eye height the shooter's client sent |
 | `eyeRefused` | Shots whose sent eye height was more than 24 units from the server's own. The server used its own |
 | `eyeDiffAvg`, `eyeDiffMax` | How far the sent eye height was from the server's own, in units |
+| `originFar`, `originGapMax` | Rifle and sniper shots fired while the shooter's own spot was further from the server's than the movement code allows without a correction, and the largest such distance, in units |
 | `ping`, `lostMoves` | The player's ping and lost moves |
 
 The single lines behind the shot and switch counts are only written while [TraceInput](#traceinput) is on for that player.

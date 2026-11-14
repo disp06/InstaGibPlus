@@ -12,6 +12,12 @@ enum EHitSoundSource {
 	HSSRC_Server,
 	HSSRC_Client
 };
+// When the ring of the InstaGib rifle shows on a player we hit: at the click,
+// from our own trace (Client), or once the server has counted the hit (Server).
+enum EHitEffectSource {
+	HESRC_Server,
+	HESRC_Client
+};
 
 var config bool   bInitialized;
 var config bool   bForceModels; // if Client wishes models forced to his own. (default false)
@@ -51,6 +57,7 @@ var config float  BeamDuration;
 var config int    BeamOriginMode;
 var config int    BeamDestinationMode;
 var config int    SSRRingType;
+var config EHitEffectSource HitEffectSource;
 var config float  DesiredNetUpdateRate;
 var config int    DesiredNetspeed;
 var config bool   bNoSmoothing;
@@ -317,6 +324,14 @@ static function EHitSoundSource IntToHitSoundSource(int A) {
 	return HSSRC_Server;
 }
 
+static function EHitEffectSource IntToHitEffectSource(int A) {
+	switch(A) {
+		case 0: return HESRC_Server;
+		case 1: return HESRC_Client;
+	}
+	return HESRC_Client;
+}
+
 static function EHitMarkerSource IntToHitMarkerSource(int A) {
 	switch(A) {
 		case 0: return HMSRC_Server;
@@ -380,6 +395,7 @@ simulated function string DumpSettings() {
 		GetSetting("BeamOriginMode")$
 		GetSetting("BeamDestinationMode")$
 		GetSetting("SSRRingType")$
+		GetSetting("HitEffectSource")$
 		GetSetting("DesiredNetUpdateRate")$
 		GetSetting("bNoSmoothing")$
 		GetSetting("bNoOwnFootsteps")$
@@ -488,6 +504,7 @@ defaultproperties
 	BeamOriginMode=0
 	BeamDestinationMode=0
 	SSRRingType=1
+	HitEffectSource=HESRC_Client
 	DesiredNetUpdateRate=200.0
 	DesiredNetspeed=25000
 	bNoSmoothing=True

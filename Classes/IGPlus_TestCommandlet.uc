@@ -314,6 +314,17 @@ function TestTickInterp() {
 	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_TI_Unpack(P, 2050) - 2046.25) < 0.005
 		&& class'bbPlayer'.static.IGPlus_TI_UnpackSpan(P) == 0,
 		"TickInterp_a_report_from_before_the_tick_count_wraps_is_read_right");
+	// A shot leaves from the client's own spot while that is no further from
+	// ours than the movement code lets it be (the square of the gap up to 3).
+	LogTestResult(class'bbPlayer'.static.IGPlus_ShotOriginIsNear(0.0) && class'bbPlayer'.static.IGPlus_ShotOriginIsNear(1.7)
+		&& class'bbPlayer'.static.IGPlus_ShotOriginIsNear(1.8) == false && class'bbPlayer'.static.IGPlus_ShotOriginIsNear(-1.0) == false,
+		"ShotOrigin_the_client_spot_counts_only_inside_the_movement_tolerance");
+	LogTestResult(class'ClientSettings'.static.IntToHitEffectSource(0) == HESRC_Server
+		&& class'ClientSettings'.static.IntToHitEffectSource(1) == HESRC_Client
+		&& class'ClientSettings'.default.HitEffectSource == HESRC_Client
+		&& class'SuperShockRifleBeamEffect'.default.bPlayBeam && class'SuperShockRifleBeamEffect'.default.bPlayRing == false
+		&& class'SuperShockRifleRingEffect'.default.bPlayRing && class'SuperShockRifleRingEffect'.default.bPlayBeam == false,
+		"HitEffectSource_starts_on_client_and_the_two_effect_halves_are_split");
 	// The server tests a shot against the spot as the client got it: in whole units.
 	LogTestResult(class'bbPlayer'.static.IGPlus_TI_WireLoc(vect(2317.04,-126.51,-212.2)) == vect(2317,-127,-212),
 		"TickInterp_the_server_rounds_a_spot_as_the_engine_sends_it");
