@@ -1302,7 +1302,26 @@ function bool MutatorBroadcastLocalizedMessage( Actor Sender, Pawn Receiver, out
 	if (A.isa('Pawn'))
 		return false;
 
-	return Super.MutatorBroadcastLocalizedMessage( Sender, Receiver, Message, Switch, RelatedPRI_1, RelatedPRI_2, OptionalObject );
+	if (Super.MutatorBroadcastLocalizedMessage( Sender, Receiver, Message, Switch, RelatedPRI_1, RelatedPRI_2, OptionalObject ) == false)
+		return false;
+
+	// The engine's DemoRecSpectator writes broadcasts into a server demo, and
+	// playback shows them to the demo spectator. The stock first blood and
+	// death messages give their voice and "You killed" lines only to the player
+	// named in them, so the demo copy gets the classes that also give them to a
+	// viewer following that player. Message is the caller's loop variable, so
+	// it is not changed here: the copy is sent and the stock call skipped.
+	if (DemoRecSpectator(Receiver) != None) {
+		if (Message == class'FirstBloodMessage') {
+			Receiver.ReceiveLocalizedMessage(class'SpecFirstBloodMessage', Switch, RelatedPRI_1, RelatedPRI_2, OptionalObject);
+			return false;
+		}
+		if (Message == class'Botpack.DeathMessagePlus') {
+			Receiver.ReceiveLocalizedMessage(class'IGPlus_DeathMessagePlus', Switch, RelatedPRI_1, RelatedPRI_2, OptionalObject);
+			return false;
+		}
+	}
+	return true;
 
 } // MutatorBroadcastLocalizedMessage
 
@@ -1337,7 +1356,9 @@ function ScoreKill(Pawn Killer, Pawn Other)
 	) {
 		Num = Killer.Spree + 1;
 		if (Num <= 25 && Num % 5 == 0)
-			IGPlus_DemoGlobalMessage(class'KillingSpreeMessage', Num / 5 - 1, Killer.PlayerReplicationInfo, none);
+			// SpecSpreeMessage: a viewer following the killer hears the spree
+			// voice, as the killer does live.
+			IGPlus_DemoGlobalMessage(class'SpecSpreeMessage', Num / 5 - 1, Killer.PlayerReplicationInfo, none);
 	}
 	Super.ScoreKill(Killer, Other);
 }
