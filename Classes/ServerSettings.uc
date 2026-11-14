@@ -78,7 +78,6 @@ var config float SnapshotInterpRewindMs;
 var config bool  bEnableWarpFix;
 var config bool  bEnableAdaptiveBuffering;
 var config bool  bEnableTickInterpolation;
-var config bool  bEnableFireTimeOrder;
 var config int   AdaptiveBufferingMax; // ms
 var config bool  bEnableCarcassCollision;
 var config bool  ShowTouchedPackage;
@@ -213,7 +212,6 @@ function DumpServerSettings(PlayerPawn P) {
 	DumpSetting(P, "bEnableWarpFix");
 	DumpSetting(P, "bEnableAdaptiveBuffering");
 	DumpSetting(P, "bEnableTickInterpolation");
-	DumpSetting(P, "bEnableFireTimeOrder");
 	DumpSetting(P, "AdaptiveBufferingMax");
 	DumpSetting(P, "MinClientRate");
 	DumpSetting(P, "MaxClientRate");
@@ -289,7 +287,6 @@ defaultproperties
 	bEnableWarpFix=True
 	bEnableAdaptiveBuffering=False
 	bEnableTickInterpolation=False
-	bEnableFireTimeOrder=True
 	AdaptiveBufferingMax=100
 	bEnableCarcassCollision=True
 	HitFeedbackMode=HFM_Always

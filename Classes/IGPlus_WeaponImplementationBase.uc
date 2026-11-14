@@ -45,6 +45,22 @@ function float IGPlus_GetSnapshotInterpRewindMs(Pawn Instigator) {
     return 0.0;
 }
 
+// Tick Interpolation: how far behind their newest update the shooter's screen
+// drew the player they aimed at, as their last move said
+// (bbPlayer.IGPlus_PRTNoteInterp). A new projectile of theirs is moved ahead
+// by this on top of the one-way ping, as with Snapshot Interpolation's delay:
+// the shooter led a target that was drawn that much in the past (rig, Nov 14
+// 2026: without it the drawn target was 17 units behind the server's when a
+// rocket passed it, against 7 with players carried forward as before).
+function float IGPlus_GetTickInterpDelayMs(Pawn Instigator) {
+	local bbPlayer bbP;
+
+	bbP = bbPlayer(Instigator);
+	if (bbP == None || bbP.IGPlus_EnableTickInterp == false || bbP.IGPlus_bPRTInterp == false)
+		return 0.0;
+	return FMax(0.0, bbP.IGPlus_PRTInterpDelayMs);
+}
+
 function float IGPlus_GetLatencyMs(Pawn Instigator, optional bool bOneWay) {
 	local bbPlayer bbP;
 	local float PingMs;
@@ -112,6 +128,8 @@ function float IGPlus_GetAveragePingRewindMs(Pawn Instigator) {
 			EffectivePing = (0.5 * (BasePingMs + float(bbP.IGPlus_ABDelayMs))) + InterpMs;
 	} else
 		EffectivePing = BasePingMs;
+	// (A shot whose report failed its check, with Tick Interpolation on.)
+	EffectivePing += IGPlus_GetTickInterpDelayMs(Instigator);
 
 	if (WSettingsRepl != None && EffectivePing > WSettingsRepl.PingCompensationMax)
 		EffectivePing = WSettingsRepl.PingCompensationMax;
@@ -1226,7 +1244,7 @@ function float SimulateProjectile(Projectile P, int Ping, optional float CatchUp
   if (CatchUpMs > 0.0) {
     SimPing = CatchUpMs;
   } else {
-    InterpMs = IGPlus_GetSnapshotInterpRewindMs(P.Instigator);
+    InterpMs = IGPlus_GetSnapshotInterpRewindMs(P.Instigator) + IGPlus_GetTickInterpDelayMs(P.Instigator);
     // The shot's move ran one way plus the Adaptive Buffering delay after it
     // was made. Half the ping holds half that delay: add the other half.
     SimPing = (Ping + bbPlayer(P.Instigator).IGPlus_ABDelayMs) * 0.5 + InterpMs;
@@ -1284,7 +1302,7 @@ function BatchSimulateProjectiles(Projectile Projectiles[6], int NumProjectiles,
     
   PureRef = bbPlayer(Projectiles[0].Instigator).zzUTPure;
 
-  InterpMs = IGPlus_GetSnapshotInterpRewindMs(Projectiles[0].Instigator);
+  InterpMs = IGPlus_GetSnapshotInterpRewindMs(Projectiles[0].Instigator) + IGPlus_GetTickInterpDelayMs(Projectiles[0].Instigator);
   // Simulate only 1-way latency, with the other half of the Adaptive
   // Buffering delay (see SimulateProjectile).
   SimPing = (Ping + bbPlayer(Projectiles[0].Instigator).IGPlus_ABDelayMs) * 0.5 + InterpMs;

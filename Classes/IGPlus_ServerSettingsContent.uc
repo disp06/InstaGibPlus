@@ -236,9 +236,6 @@ var IGPlus_EditControl Edit_AdaptiveBufferingMax;
 var UWindowCheckbox Chk_bEnableTickInterpolation;
 var localized string bEnableTickInterpolationText;
 var localized string bEnableTickInterpolationHelp;
-var UWindowCheckbox Chk_bEnableFireTimeOrder;
-var localized string bEnableFireTimeOrderText;
-var localized string bEnableFireTimeOrderHelp;
 var localized string AdaptiveBufferingMaxText;
 var localized string AdaptiveBufferingMaxHelp;
 
@@ -701,7 +698,6 @@ function SaveServerSettings() {
 	SaveServerSettingIfChanged(S, "bEnableAdaptiveBuffering", BoolToString(Chk_bEnableAdaptiveBuffering.bChecked));
 	SaveServerSettingIfChanged(S, "AdaptiveBufferingMax", Edit_AdaptiveBufferingMax.GetValue());
 	SaveServerSettingIfChanged(S, "bEnableTickInterpolation", BoolToString(Chk_bEnableTickInterpolation.bChecked));
-	SaveServerSettingIfChanged(S, "bEnableFireTimeOrder", BoolToString(Chk_bEnableFireTimeOrder.bChecked));
 
 	SaveServerSettingIfChanged(S, "MinClientRate", Edit_MinClientRate.GetValue());
 	SaveServerSettingIfChanged(S, "MaxClientRate", Edit_MaxClientRate.GetValue());
@@ -1128,7 +1124,6 @@ function LoadServerSettings() {
 	Chk_bEnableAdaptiveBuffering.bChecked = S.bEnableAdaptiveBuffering;
 	Edit_AdaptiveBufferingMax.SetValue(string(S.AdaptiveBufferingMax));
 	Chk_bEnableTickInterpolation.bChecked = S.bEnableTickInterpolation;
-	Chk_bEnableFireTimeOrder.bChecked = S.bEnableFireTimeOrder;
 
 	Edit_MinClientRate.SetValue(string(S.MinClientRate));
 	Edit_MaxClientRate.SetValue(string(S.MaxClientRate));
@@ -1245,7 +1240,6 @@ function Created() {
 	Chk_bEnableAdaptiveBuffering = CreateCheckbox(bEnableAdaptiveBufferingText, bEnableAdaptiveBufferingHelp);
 	Edit_AdaptiveBufferingMax = CreateEdit(ECT_Integer, AdaptiveBufferingMaxText, AdaptiveBufferingMaxHelp, 16, 80);
 	Chk_bEnableTickInterpolation = CreateCheckbox(bEnableTickInterpolationText, bEnableTickInterpolationHelp);
-	Chk_bEnableFireTimeOrder = CreateCheckbox(bEnableFireTimeOrderText, bEnableFireTimeOrderHelp);
 
 	Lbl_ClientEnforcement = CreateSeparator(ClientEnforcementText);
 	Edit_MinClientRate = CreateEdit(ECT_Integer, MinClientRateText, MinClientRateHelp, 8, 80);
@@ -1395,7 +1389,6 @@ function BeforePaint(Canvas C, float X, float Y) {
 	LayoutControl(Chk_bEnableAdaptiveBuffering, bShowSettings, WndWidth, Top);
 	LayoutControl(Edit_AdaptiveBufferingMax, bShowSettings, WndWidth, Top);
 	LayoutControl(Chk_bEnableTickInterpolation, bShowSettings, WndWidth, Top);
-	LayoutControl(Chk_bEnableFireTimeOrder, bShowSettings, WndWidth, Top);
 
 	LayoutControl(Lbl_ClientEnforcement, bShowSettings, WndWidth, Top);
 	LayoutControl(Edit_MinClientRate, bShowSettings, WndWidth, Top);
@@ -1634,8 +1627,6 @@ defaultproperties
 	AdaptiveBufferingMaxText="Adaptive Buffering Max"
 	bEnableTickInterpolationText="Tick Interpolation"
 	bEnableTickInterpolationHelp="If checked, clients draw other players between two server updates, a little in the past, and a shot is tested against the exact spot the shooter's screen drew. Needs ping compensation and Precise Rewind Time. Not with Snapshot Interpolation or Input Replication."
-	bEnableFireTimeOrderText="Fire Time Order"
-	bEnableFireTimeOrderHelp="If checked, rifle and sniper shots of NextIG and NextSA that reach the server in the same tick run in the order they were fired. If not, they run in the order their packets arrived."
 	AdaptiveBufferingMaxHelp="The most delay Adaptive Buffering gives one player, in milliseconds. Movement that arrives later than this runs at once, as without Adaptive Buffering."
 
 	ClientEnforcementText="Client Enforcement"

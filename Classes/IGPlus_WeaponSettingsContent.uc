@@ -88,6 +88,9 @@ var localized string bEnablePreciseRewindTimeHelp;
 var UWindowCheckbox Chk_bEnableTrades;
 var localized string bEnableTradesText;
 var localized string bEnableTradesHelp;
+var UWindowCheckbox Chk_bEnableFireTimeOrder;
+var localized string bEnableFireTimeOrderText;
+var localized string bEnableFireTimeOrderHelp;
 var IGPlus_EditControl Edit_PreciseRewindTimeMaxDeviationMs;
 var localized string PreciseRewindTimeMaxDeviationMsText;
 var localized string PreciseRewindTimeMaxDeviationMsHelp;
@@ -901,6 +904,7 @@ function SaveWeaponSettings() {
 	SaveWeaponSettingIfChanged(S, "bEnableSubTickCompensation", BoolToString(Chk_bEnableSubTickCompensation.bChecked));
 	SaveWeaponSettingIfChanged(S, "bEnablePreciseRewindTime", BoolToString(Chk_bEnablePreciseRewindTime.bChecked));
 	SaveWeaponSettingIfChanged(S, "bEnableTrades", BoolToString(Chk_bEnableTrades.bChecked));
+	SaveWeaponSettingIfChanged(S, "bEnableFireTimeOrder", BoolToString(Chk_bEnableFireTimeOrder.bChecked));
 	SaveWeaponSettingIfChanged(S, "PreciseRewindTimeMaxDeviationMs", Edit_PreciseRewindTimeMaxDeviationMs.GetValue());
 	SaveWeaponSettingIfChanged(S, "PingCompensationMax", Edit_PingCompensationMax.GetValue());
 	SaveWeaponSettingIfChanged(S, "bEnableAnimationAdaptiveHeadHitbox", BoolToString(Chk_bEnableAnimationAdaptiveHeadHitbox.bChecked));
@@ -1515,6 +1519,7 @@ function LoadWeaponSettings() {
 	Chk_bEnableSubTickCompensation.bChecked = S.bEnableSubTickCompensation;
 	Chk_bEnablePreciseRewindTime.bChecked = S.bEnablePreciseRewindTime;
 	Chk_bEnableTrades.bChecked = S.bEnableTrades;
+	Chk_bEnableFireTimeOrder.bChecked = S.bEnableFireTimeOrder;
 	Edit_PreciseRewindTimeMaxDeviationMs.SetValue(string(S.PreciseRewindTimeMaxDeviationMs));
 	Edit_PingCompensationMax.SetValue(string(S.PingCompensationMax));
 	Chk_bEnableAnimationAdaptiveHeadHitbox.bChecked = S.bEnableAnimationAdaptiveHeadHitbox;
@@ -1702,6 +1707,7 @@ function Created() {
 	Chk_bEnableSubTickCompensation = CreateCheckbox(bEnableSubTickCompensationText, bEnableSubTickCompensationHelp);
 	Chk_bEnablePreciseRewindTime = CreateCheckbox(bEnablePreciseRewindTimeText, bEnablePreciseRewindTimeHelp);
 	Chk_bEnableTrades = CreateCheckbox(bEnableTradesText, bEnableTradesHelp);
+	Chk_bEnableFireTimeOrder = CreateCheckbox(bEnableFireTimeOrderText, bEnableFireTimeOrderHelp);
 	Edit_PreciseRewindTimeMaxDeviationMs = CreateEdit(ECT_Integer, PreciseRewindTimeMaxDeviationMsText, PreciseRewindTimeMaxDeviationMsHelp, 8, 80);
 	Edit_PingCompensationMax = CreateEdit(ECT_Integer, PingCompensationMaxText, PingCompensationMaxHelp, 8, 80);
 	Chk_bEnableAnimationAdaptiveHeadHitbox = CreateCheckbox(bEnableAnimationAdaptiveHeadHitboxText, bEnableAnimationAdaptiveHeadHitboxHelp);
@@ -1971,6 +1977,7 @@ function BeforePaint(Canvas C, float X, float Y) {
 	LayoutControl(Edit_PingCompensationMax, bShowSettings, WndWidth, Top);
 	LayoutControl(Chk_bEnableAnimationAdaptiveHeadHitbox, bShowSettings, WndWidth, Top);
 	LayoutControl(Chk_bEnableTrades, bShowSettings && Mode != 0, WndWidth, Top); // NextIG and NextSA only
+	LayoutControl(Chk_bEnableFireTimeOrder, bShowSettings, WndWidth, Top);
 
 	LayoutControl(Lbl_Pickups, bShowPickups, WndWidth, Top);
 	LayoutControl(Edit_InvisibilityDuration, bShowPickups, WndWidth, Top);
@@ -2255,6 +2262,8 @@ defaultproperties
 	bEnablePreciseRewindTimeHelp="Weapon setting: rewind hitscan shots to the moment the shooter's screen showed"
 	bEnableTradesText="Enable Trades"
 	bEnableTradesHelp="Weapon setting: a shot from a player who just died still counts. NextIG and NextSA read this in place of the server setting"
+	bEnableFireTimeOrderText="Enable Fire Time Order"
+	bEnableFireTimeOrderHelp="Weapon setting: rifle and sniper shots that reach the server in the same tick run in the order they were fired, not in the order their packets arrived. NextIG and NextSA start with it on"
 	PreciseRewindTimeMaxDeviationMsText="Precise Rewind Time Max Deviation"
 	PreciseRewindTimeMaxDeviationMsHelp="Weapon setting: how many ms the client's rewind may differ from the server's own ping before the server uses its old rewind"
 	PingCompensationMaxText="Ping Compensation Max"

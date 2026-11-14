@@ -1120,7 +1120,6 @@ function IGPlus_ServerRequestSettings() {
 	IGPlus_ServerSendSetting("bEnableWarpFix");
 	IGPlus_ServerSendSetting("bEnableAdaptiveBuffering");
 	IGPlus_ServerSendSetting("bEnableTickInterpolation");
-	IGPlus_ServerSendSetting("bEnableFireTimeOrder");
 	IGPlus_ServerSendSetting("AdaptiveBufferingMax");
 
 	IGPlus_ServerSendSetting("MinClientRate");
@@ -1211,6 +1210,7 @@ function IGPlus_WeaponRequestSettings() {
 	IGPlus_WeaponSendSetting("bEnableSubTickCompensation");
 	IGPlus_WeaponSendSetting("bEnablePreciseRewindTime");
 	IGPlus_WeaponSendSetting("bEnableTrades");
+	IGPlus_WeaponSendSetting("bEnableFireTimeOrder");
 	IGPlus_WeaponSendSetting("PreciseRewindTimeMaxDeviationMs");
 	IGPlus_WeaponSendSetting("PingCompensationMax");
 	IGPlus_WeaponSendSetting("bEnableAnimationAdaptiveHeadHitbox");

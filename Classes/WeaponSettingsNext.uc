@@ -8,5 +8,6 @@ class WeaponSettingsNext extends WeaponSettings perobjectconfig;
 defaultproperties {
 	bEnableSubTickCompensation=True
 	bEnablePreciseRewindTime=True
+	bEnableFireTimeOrder=True
 	PingCompensationMax=250
 }

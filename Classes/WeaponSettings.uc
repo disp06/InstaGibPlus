@@ -186,6 +186,12 @@ var config int   PingCompensationMax;
 // Every other mode reads the server setting bEnableAllWeaponTrades.
 var config bool  bEnableTrades;
 
+// Fire Time Order: rifle and sniper shots that reach the server in the same
+// tick run in the order they were fired, not in the order their packets
+// arrived (bbPlayer.IGPlus_QueueShot). Off here. NextIG and NextSA start with
+// it on (WeaponSettingsNext).
+var config bool  bEnableFireTimeOrder;
+
 var config bool  bEnableAnimationAdaptiveHeadHitbox;
 
 var config int   InvisibilityDuration;
@@ -561,6 +567,7 @@ defaultproperties
 
 	bEnablePreciseRewindTime=False
 	bEnableTrades=False
+	bEnableFireTimeOrder=False
 	PreciseRewindTimeMaxDeviationMs=60
 	
 	PingCompensationMax=200

@@ -159,6 +159,7 @@ var bool  bEnableSubTickCompensation;
 
 var bool  bEnablePreciseRewindTime;
 var bool  bEnableTrades;
+var bool  bEnableFireTimeOrder;
 var int   PreciseRewindTimeMaxDeviationMs;
 
 var int   PingCompensationMax;
@@ -341,6 +342,7 @@ replication {
 		bEnableSubTickCompensation,
 		bEnablePreciseRewindTime,
 		bEnableTrades,
+		bEnableFireTimeOrder,
 		PreciseRewindTimeMaxDeviationMs,
 		PingCompensationMax,
 		bEnableAnimationAdaptiveHeadHitbox;
@@ -712,6 +714,7 @@ function InitFromWeaponSettings(WeaponSettings S) {
 
 	bEnablePreciseRewindTime = S.bEnablePreciseRewindTime;
 	bEnableTrades = S.bEnableTrades;
+	bEnableFireTimeOrder = S.bEnableFireTimeOrder;
 	PreciseRewindTimeMaxDeviationMs = S.PreciseRewindTimeMaxDeviationMs;
 
 	PingCompensationMax = S.PingCompensationMax;
@@ -888,6 +891,7 @@ defaultproperties
 
 	bEnablePreciseRewindTime=False
 	bEnableTrades=False
+	bEnableFireTimeOrder=False
 	PreciseRewindTimeMaxDeviationMs=60
 	
 	PingCompensationMax=200

@@ -1422,7 +1422,6 @@ function string IGPlus_NormalizeServerSettingKey(string Key) {
 	if (Key ~= "bEnableAdaptiveBuffering") return "bEnableAdaptiveBuffering";
 	if (Key ~= "AdaptiveBufferingMax") return "AdaptiveBufferingMax";
 	if (Key ~= "bEnableTickInterpolation") return "bEnableTickInterpolation";
-	if (Key ~= "bEnableFireTimeOrder") return "bEnableFireTimeOrder";
 	if (Key ~= "MinClientRate") return "MinClientRate";
 	if (Key ~= "MaxClientRate") return "MaxClientRate";
 	if (Key ~= "ShowTouchedPackage") return "ShowTouchedPackage";
@@ -1541,6 +1540,7 @@ function string IGPlus_NormalizeWeaponSettingKey(string Key) {
 	if (Key ~= "bEnableSubTickCompensation") return "bEnableSubTickCompensation";
 	if (Key ~= "bEnablePreciseRewindTime") return "bEnablePreciseRewindTime";
 	if (Key ~= "bEnableTrades") return "bEnableTrades";
+	if (Key ~= "bEnableFireTimeOrder") return "bEnableFireTimeOrder";
 	if (Key ~= "PreciseRewindTimeMaxDeviationMs") return "PreciseRewindTimeMaxDeviationMs";
 	if (Key ~= "PingCompensationMax") return "PingCompensationMax";
 	if (Key ~= "bEnableAnimationAdaptiveHeadHitbox") return "bEnableAnimationAdaptiveHeadHitbox";

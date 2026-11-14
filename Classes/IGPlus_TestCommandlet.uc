@@ -279,6 +279,17 @@ function TestTickInterp() {
 		"TickInterp_carry_stops_after_two_ticks");
 	LogTestResult(class'bbPlayer'.static.IGPlus_TI_CarryTicks(1.25, true) == 0.0,
 		"TickInterp_a_held_player_is_not_carried_on");
+	// The delay rides in the same report and leaves the tick position alone.
+	P = class'bbPlayer'.static.IGPlus_TI_Pack(500.75, true, true, 2.7);
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_TI_UnpackDelay(P) - 2.5) < 0.01
+		&& Abs(class'bbPlayer'.static.IGPlus_TI_Unpack(P, 501) - 500.75) < 0.005
+		&& (P & (1 << 24)) != 0 && (P & (1 << 25)) != 0 && P < 0,
+		"TickInterp_report_carries_the_drawing_delay_in_half_ticks");
+	P = class'bbPlayer'.static.IGPlus_TI_Pack(500.75, false, false, 40.0);
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_UnpackDelay(P) == 15.5 && Abs(class'bbPlayer'.static.IGPlus_TI_Unpack(P, 501) - 500.75) < 0.005,
+		"TickInterp_a_delay_too_long_for_the_report_is_cut_off");
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_UnpackDelay(class'bbPlayer'.static.IGPlus_TI_Pack(70000.5)) == 0.0,
+		"TickInterp_a_report_without_a_delay_reads_as_none");
 	// 25 units in one 10 ms tick is a fall at 2500 units a second.
 	LogTestResult(class'bbPlayer'.static.IGPlus_TI_IsJump(vect(0,0,0), vect(0,0,-25), 1, 0.01) == false,
 		"TickInterp_fast_movement_is_drawn_between_its_updates");

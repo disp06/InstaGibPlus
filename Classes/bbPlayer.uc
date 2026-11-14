@@ -967,6 +967,7 @@ var float IGPlus_TI_Clock;           // the server tick position now, smoothed
 var float IGPlus_PRTShotR;           // the tick position this frame's shot reports (its target's)
 var bool IGPlus_bPRTShotPast;        // and whether the target was drawn past its newest update
 var bool IGPlus_bPRTShotHeld;        // and whether it stood still there, held by the server
+var float IGPlus_PRTShotDelay;       // and how many ticks behind its newest update it was drawn
 // Client, on another player's pawn: its last 16 updates with their tick numbers, oldest first from IGPlus_TI_Head - IGPlus_TI_Num.
 // 16 covers the longest delay (IGPLUS_TI_MAX_DELAY) with an update in every tick.
 var int IGPlus_TI_Tick[16];
@@ -1012,6 +1013,10 @@ var float IGPlus_TI_StNextLine, IGPlus_TI_StSince;
 // Server: the last report was a tick position (IGPlus_PRTNoteInterp).
 var bool IGPlus_bPRTInterp, IGPlus_bPRTInterpPast, IGPlus_bPRTInterpHeld;
 var float IGPlus_PRTInterpR;
+// Server: how far behind their newest update the shooter's screen drew the
+// player they aimed at, from the same report. New projectiles of theirs are
+// moved ahead by this as well (IGPlus_WeaponImplementationBase.IGPlus_GetTickInterpDelayMs).
+var float IGPlus_PRTInterpDelayMs;
 const IGPLUS_TI_EXTRA = 1.0;         // ticks of delay on top of the gap between a player's updates
 const IGPLUS_TI_MIN_DELAY = 2.0;
 const IGPLUS_TI_MAX_DELAY = 10.0;
@@ -3734,7 +3739,9 @@ static function int IGPlus_PRTPack(int Tick, float Age) {
 // standing still). The server then has to do the same, and not use an update
 // that reached us later.
 // bHeld: and there they stood still, because the server said it holds them.
-static function int IGPlus_TI_Pack(float R, optional bool bPast, optional bool bHeld) {
+// Delay: how many ticks behind their newest update that player was drawn, in
+// half ticks in bits 26 to 30. The server moves our new projectiles ahead by it.
+static function int IGPlus_TI_Pack(float R, optional bool bPast, optional bool bHeld, optional float Delay) {
 	local int T, D;
 
 	if (R < 0.0)
@@ -3745,7 +3752,12 @@ static function int IGPlus_TI_Pack(float R, optional bool bPast, optional bool b
 		D = D | (1 << 24);
 	if (bPast && bHeld)
 		D = D | (1 << 25);
+	D = D | (Clamp(int(Delay * 2.0 + 0.5), 0, 31) << 26);
 	return D;
+}
+// The server's reading of the delay, in ticks.
+static function float IGPlus_TI_UnpackDelay(int Data) {
+	return float((Data >>> 26) & 0x1F) * 0.5;
 }
 // How many ticks a player is carried on by their velocity, Past ticks after
 // their newest update. None while the server holds them still (Adaptive
@@ -3831,6 +3843,7 @@ function IGPlus_PRTNoteInterp(int Data, WeaponSettingsRepl WS) {
 	IGPlus_bPRTInterpPast = (Data & (1 << 24)) != 0;
 	IGPlus_bPRTInterpHeld = (Data & (1 << 25)) != 0;
 	IGPlus_PRTInterpR = IGPlus_TI_Unpack(Data, G);
+	IGPlus_PRTInterpDelayMs = 1000.0 * FMin(IGPlus_TI_UnpackDelay(Data), IGPLUS_TI_MAX_DELAY) * TickLen / Level.TimeDilation;
 	IGPlus_PRTNoteTS = Level.TimeSeconds;
 	IGPlus_PRTNoteTick = IGPlus_PRTServerTick;
 	IGPlus_PRTSeenTime = Level.TimeSeconds - (float(G) - IGPlus_PRTInterpR) * TickLen;
@@ -6771,10 +6784,14 @@ function float IGPlus_ShotAgo(float StepTS) {
 // Server: a rifle or sniper shot waits for the end of the tick's packets.
 // False: it can't wait, the weapon traces it now.
 function bool IGPlus_QueueShot(Weapon W, rotator View, vector Loc) {
+	local WeaponSettingsRepl WS;
+
 	if (zzUTPure == None || zzUTPure.IGPlus_bShotOrderReady == false)
 		return false;
-	// Fire Time Order off: the shot runs now, in the order its packet arrived.
-	if (zzUTPure.Settings == None || zzUTPure.Settings.bEnableFireTimeOrder == false)
+	// Fire Time Order off (the mode's weapon setting bEnableFireTimeOrder): the
+	// shot runs now, in the order its packet arrived.
+	WS = GetWeaponSettings();
+	if (WS == None || WS.bEnableFireTimeOrder == false)
 		return false;
 	// One at a time: a second shot of ours runs the first one now.
 	if (IGPlus_bShotPending)
@@ -7655,6 +7672,43 @@ function bbPlayer IGPlus_PRTShotTarget(Actor Other, vector Start, vector Dir) {
 	return Best;
 }
 
+// Client, Tick Interpolation: the other player nearest our line of sight, where
+// the last frame drew them. Every move reports the tick position that player
+// was drawn at, so a weapon with no trace of its own on this client (the
+// shock rifle, the minigun, a projectile) is still tested against the moment
+// the screen showed its target. Players are drawn with different delays, and
+// the server stands them all at the one reported moment, so it has to be the
+// moment of the one we aim at (rig, Nov 14 2026: with "2 ticks back" for
+// everyone, 31 of 88 shock rifle shots at a target with a bad connection
+// looked different from what the server decided).
+function bbPlayer IGPlus_TI_AimTarget() {
+	local int i;
+	local PlayerReplicationInfo PRI;
+	local bbPlayer P, Best;
+	local vector Start, Dir;
+	local float Gap, BestGap;
+
+	if (GameReplicationInfo == None)
+		return None;
+	Start = Location + EyeHeight * vect(0,0,1);
+	Dir = vector(ViewRotation);
+	for (i = 0; i < arraycount(GameReplicationInfo.PRIArray); ++i) {
+		PRI = GameReplicationInfo.PRIArray[i];
+		if (PRI == None) break;
+		P = bbPlayer(PRI.Owner);
+		if (P == None || P == self || P.Role != ROLE_SimulatedProxy || P.IGPlus_TI_Use() == false) continue;
+		if (P.bHidden || P.Health <= 0 || P.IGPlus_TI_Num == 0) continue;
+		// Drawn in the last frame, and in front of us.
+		if (P.IGPlus_ShownFrame < IGPlus_FrameCount - 1 || ((P.IGPlus_ShownLoc - Start) dot Dir) <= 0.0) continue;
+		Gap = IGPlus_LineCylinderGap(Start, Dir, P.IGPlus_ShownLoc, P.CollisionRadius, P.CollisionHeight);
+		if (Best == None || Gap < BestGap) {
+			Best = P;
+			BestGap = Gap;
+		}
+	}
+	return Best;
+}
+
 function Actor IGPlus_ClientShotTrace(
 	out vector HitLocation, out vector HitNormal, out vector HitOffset,
 	vector EndTrace, vector StartTrace, IGPlus_WeaponImplementationBase WB
@@ -7702,6 +7756,7 @@ function Actor IGPlus_ClientShotTrace(
 				IGPlus_PRTShotR = ShotTarget.IGPlus_ShownR;
 				IGPlus_bPRTShotPast = ShotTarget.IGPlus_bShownPast;
 				IGPlus_bPRTShotHeld = ShotTarget.IGPlus_bShownHeld;
+				IGPlus_PRTShotDelay = ShotTarget.IGPlus_TI_Delay;
 			}
 		} else {
 			// The same frame for every player: the engine moves them all on.
@@ -7868,7 +7923,7 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 			// Tick Interpolation: the tick position we read from the report,
 			// and the ticks of the two snapshots we stood that player between.
 			if (D != None && IGPlus_bPRTInterp)
-				S = S@"srvR="$IGPlus_PRTInterpR@"srvPast="$IGPlus_bPRTInterpPast@"srvHeld="$IGPlus_bPRTInterpHeld@"srvTicks="$D.CompTickA$"-"$D.CompTickB;
+				S = S@"srvR="$IGPlus_PRTInterpR@"srvPast="$IGPlus_bPRTInterpPast@"srvHeld="$IGPlus_bPRTInterpHeld@"srvDelayMs="$IGPlus_Fmt1(IGPlus_PRTInterpDelayMs)@"srvTicks="$D.CompTickA$"-"$D.CompTickB;
 		}
 	}
 	WB = IGPlus_GetWeaponImplementationBase();
@@ -9967,6 +10022,7 @@ function xxReplicateMove(
 	local bool bPSAAimFix;
 	local int TlocAction;
 	local ST_TranslocatorTarget TlocDisc;
+	local bbPlayer AimTarget;
 
 	// Higor: process smooth adjustment.
 	if (IGPlus_AdjustLocationAlpha > 0)
@@ -10250,12 +10306,19 @@ function xxReplicateMove(
 	// Precise Rewind Time: what our last frame showed of the others.
 	NewMove.IGPlus_PRTData = 0;
 	if (IGPlus_EnableTickInterp && IGPlus_TI_Clock > 0.0) {
-		// The tick position the shot's target was drawn at. Other moves
-		// report the usual one, for the weapons that trace later in the tick.
+		// The tick position the shot's target was drawn at (the rifle and
+		// the NextSA sniper find it with their own trace). Every other move
+		// reports the one of the player nearest our line of sight, for the
+		// weapons that have no trace here or trace later in the tick.
+		AimTarget = None;
+		if ((bDetLocalShot && IGPlus_PRTShotR > 0.0) == false)
+			AimTarget = IGPlus_TI_AimTarget();
 		if (bDetLocalShot && IGPlus_PRTShotR > 0.0)
-			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(IGPlus_PRTShotR, IGPlus_bPRTShotPast, IGPlus_bPRTShotHeld);
+			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(IGPlus_PRTShotR, IGPlus_bPRTShotPast, IGPlus_bPRTShotHeld, IGPlus_PRTShotDelay);
+		else if (AimTarget != None)
+			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(AimTarget.IGPlus_ShownR, AimTarget.IGPlus_bShownPast, AimTarget.IGPlus_bShownHeld, AimTarget.IGPlus_TI_Delay);
 		else
-			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(IGPlus_TI_Clock - IGPLUS_TI_MIN_DELAY);
+			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(IGPlus_TI_Clock - IGPLUS_TI_MIN_DELAY, false, false, IGPLUS_TI_MIN_DELAY);
 	} else if (IGPlus_PRTSeenAt > 0 && IGPlus_PRTShownTick != 0) {
 		if (bDetLocalShot)
 			NewMove.IGPlus_PRTData = IGPlus_PRTPack(IGPlus_PRTShownTick, IGPlus_PRTShownAge + IGPlus_PRTShotLead);
@@ -10266,6 +10329,7 @@ function xxReplicateMove(
 	IGPlus_PRTShotR = 0.0;
 	IGPlus_bPRTShotPast = false;
 	IGPlus_bPRTShotHeld = false;
+	IGPlus_PRTShotDelay = 0.0;
 	// Only the shot frame's move (a single frame) carries the aimed view, so
 	// nothing else (dodges, other weapons) sees it.
 	if (bPSAAimFix && bDetLocalShot)
@@ -21194,7 +21258,6 @@ function IGPlus_ServerRequestSettings() {
 	IGPlus_ServerSendSetting("bEnableWarpFix");
 	IGPlus_ServerSendSetting("bEnableAdaptiveBuffering");
 	IGPlus_ServerSendSetting("bEnableTickInterpolation");
-	IGPlus_ServerSendSetting("bEnableFireTimeOrder");
 	IGPlus_ServerSendSetting("AdaptiveBufferingMax");
 
 	IGPlus_ServerSendSetting("MinClientRate");
@@ -21285,6 +21348,7 @@ function IGPlus_WeaponRequestSettings() {
 	IGPlus_WeaponSendSetting("bEnableSubTickCompensation");
 	IGPlus_WeaponSendSetting("bEnablePreciseRewindTime");
 	IGPlus_WeaponSendSetting("bEnableTrades");
+	IGPlus_WeaponSendSetting("bEnableFireTimeOrder");
 	IGPlus_WeaponSendSetting("PreciseRewindTimeMaxDeviationMs");
 	IGPlus_WeaponSendSetting("PingCompensationMax");
 	IGPlus_WeaponSendSetting("bEnableAnimationAdaptiveHeadHitbox");

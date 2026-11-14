@@ -1276,7 +1276,7 @@ InstaGib with the deterministic SuperShockRifle. The server traces every shot it
 * There is no translocator, as in stock InstaGib and NewNetIG. The game's translocator setting does nothing here.
 * The rifle has no range limit.
 * A shot from a player who just died only counts with [bEnableTrades](#benabletrades) on in its weapon settings. It is off by default.
-* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime) on, and with [PingCompensationMax](#pingcompensationmax) at 250.
+* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation), [bEnablePreciseRewindTime](#benablepreciserewindtime) and [bEnableFireTimeOrder](#benablefiretimeorder) on, and with [PingCompensationMax](#pingcompensationmax) at 250.
 
 ## InstaGibPlus_11.NewNetSA
 
@@ -1292,7 +1292,7 @@ SniperArena with the deterministic SniperRifle. The server traces every shot its
 * NextSA removes every weapon in the map. All other ammo becomes a bullet box, and a bullet box holds 50 bullets.
 * There is no translocator, as in stock Sniper Arena and NewNetSA. The game's translocator setting does nothing here.
 * A shot from a player who just died only counts with [bEnableTrades](#benabletrades) on in its weapon settings. It is off by default.
-* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime) on, and with [PingCompensationMax](#pingcompensationmax) at 250.
+* A new server starts with ping compensation, [bEnableSubTickCompensation](#benablesubtickcompensation), [bEnablePreciseRewindTime](#benablepreciserewindtime) and [bEnableFireTimeOrder](#benablefiretimeorder) on, and with [PingCompensationMax](#pingcompensationmax) at 250.
 
 ## InstaGibPlus_11.MutFraggerArena
 
@@ -1401,7 +1401,6 @@ Server settings can be found inside InstaGibPlus.ini.
 1. [bEnableAdaptiveBuffering](#benableadaptivebuffering)
 1. [AdaptiveBufferingMax](#adaptivebufferingmax)
 1. [bEnableTickInterpolation](#benabletickinterpolation)
-1. [bEnableFireTimeOrder](#benablefiretimeorder)
 1. [FireTimeout](#firetimeout)
 1. [DetFireClockMargin](#detfireclockmargin)
 1. [bEnablePredictedSwitching](#benablepredictedswitching)
@@ -1906,7 +1905,7 @@ The most delay [bEnableAdaptiveBuffering](#benableadaptivebuffering) gives one p
 **Type: bool**  
 **Default: False**  
 
-If enabled, a client draws every other player between two real updates from the server, a little in the past, instead of moving them forward by a guess. A rifle or sniper shot then tells the server the exact tick position its target was drawn at, and the server stands the players between the same two snapshots. What the shooter's screen showed is the spot the server tests, at any frame rate and any ping.
+If enabled, a client draws every other player between two real updates from the server, a little in the past, instead of moving them forward by a guess. Every move then tells the server the exact tick position its target was drawn at, and the server stands the players between the same two snapshots. What the shooter's screen showed is the spot the server tests, at any frame rate and any ping.
 
 How it works:
 
@@ -1919,6 +1918,8 @@ How it works:
 * A hit test takes the crouch that came with the update the body is drawn from, as the server takes it from its snapshot of that tick.
 * While a player's body stands still because their updates stopped, their animation stands still too and they make no footstep sounds.
 * The client's own trace for the instant hit sound tests the players where the last frame drew them.
+* Players are drawn with different delays, and the server stands them all at the one moment a move reports. So a move reports the moment of the player it aims at. The rifle of NextIG and the sniper of NextSA find that player with their own trace. Every other move takes the player nearest the line of sight, which covers the weapons with no trace of their own on the client: the shock rifle, the normal sniper, the minigun, the enforcer and the pulse gun.
+* The same report carries how far behind their newest update that player was drawn. The server moves a new projectile of the shooter ahead by that delay, on top of the one-way ping, because the shooter led a target that was drawn that much in the past.
 
 A player with `enableDebugData 1` gets one `Tick Interpolation:` line in the debug log for every other player every 30 seconds:
 
@@ -1936,21 +1937,6 @@ A player with `enableDebugData 1` gets one `Tick Interpolation:` line in the deb
 A client's Location Offset Fix setting has no effect while this is on. The picture is later than without it, by the delay above. A player whose packets stall is drawn standing still for a moment and then catches up. [bEnableAdaptiveBuffering](#benableadaptivebuffering) evens that out on the server.
 
 Needs [bEnablePingCompensation](#benablepingcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime). Not used with [bEnableSnapshotInterpolation](#benablesnapshotinterpolation) or bEnableInputReplication. Players on lifts are drawn the same way, with no lift handling of their own yet.
-
-## bEnableFireTimeOrder
-
-**Type: bool**  
-**Default: True**  
-
-Fire Time Order, for the rifle of NextIG and the sniper of NextSA.
-
-Without it the server runs a shot the moment it reads the shot's packet. Two shots that reach the server in the same tick then run in the order their packets arrived, and the later click can win.
-
-If set to `True`, the server notes the rifle and sniper shots of a tick and runs them once all of the tick's packets are read, the one fired first first. The fire time is the time stamp of the shot's move on the server's clock, plus half of the shooter's lowest ping of late. Two shots less than 2 ms apart keep the order they arrived in. A shooter killed by an earlier shot of the same tick loses his own shot, unless [bEnableTrades](#benabletrades) is on.
-
-It adds no delay. A shot is still traced in the tick it arrived in. `fireShared` and `fireMoved` in the `[DET-SUMMARY]` line count how often it had something to do.
-
-The server log gets one `[FIRE-ORDER]` line for each tick in which two or more such shots met. It lists the shooters in the order their shots ran, each with `agoMs`, how long before the tick the server reckons the shot was fired, and `arrived`, the place its packet had.
 
 ## KillCamDelay
 
@@ -2206,6 +2192,21 @@ How far a shot's [bEnablePreciseRewindTime](#benablepreciserewindtime) rewind ma
 **Default: False**  
 
 NextIG and NextSA only. If True, a shot that reaches the server just after its shooter died still counts, by the rule described under [bEnableAllWeaponTrades](#benableallweapontrades). In these two modes this setting decides in place of that server setting. The other modes do not read it.
+
+## bEnableFireTimeOrder
+
+**Type: bool**  
+**Default: False** (True in NextIG and NextSA)  
+
+Fire Time Order. It acts on the rifle of NextIG and on the sniper rifle in every mode.
+
+Without it the server runs a shot the moment it reads the shot's packet. Two shots that reach the server in the same tick then run in the order their packets arrived, and the later click can win.
+
+If set to `True`, the server notes the rifle and sniper shots of a tick and runs them once all of the tick's packets are read, the one fired first first. The fire time is the time stamp of the shot's move on the server's clock, plus half of the shooter's lowest ping of late. Two shots less than 2 ms apart keep the order they arrived in. A shooter killed by an earlier shot of the same tick loses his own shot, unless [bEnableTrades](#benabletrades) is on.
+
+It adds no delay. A shot is still traced in the tick it arrived in. `fireShared` and `fireMoved` in the `[DET-SUMMARY]` line count how often it had something to do.
+
+The server log gets one `[FIRE-ORDER]` line for each tick in which two or more such shots met. It lists the shooters in the order their shots ran, each with `agoMs`, how long before the tick the server reckons the shot was fired, and `arrived`, the place its packet had.
 
 ## RocketCompensatePing
 
