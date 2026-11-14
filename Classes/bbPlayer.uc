@@ -2638,6 +2638,26 @@ event ClientMessage(coerce string zzS, optional Name zzType, optional bool zzbBe
 	}
 }
 
+// Movement debug (enableDebugData 1): one line for a dodge, a jump or a
+// landing. The client writes what it did itself, the server what it did with
+// the same move. The two sides each decide on their own copy of the player
+// whether a dodge or a jump is possible, and the move carries the key press
+// only. Where a pair of lines differs, one side dodged or jumped alone, and a
+// burst of corrections follows (Send CAP) until the client has the server's
+// state again, a ping later.
+simulated function IGPlus_MoveDebug(string What) {
+	if (bUpdating) // the replay of saved moves after a correction
+		return;
+	if (Level.NetMode == NM_Client) {
+		if (bDrawDebugData)
+			ClientDebugMessage(What@"(client)"@Level.TimeSeconds@"physics="$Physics
+				@"vel="$int(Velocity.X)$","$int(Velocity.Y)$","$int(Velocity.Z));
+	} else if (bDrawDebugData && Role == ROLE_Authority) {
+		ClientDebugMessage(What@"(server)"@CurrentTimeStamp@"physics="$Physics
+			@"vel="$int(Velocity.X)$","$int(Velocity.Y)$","$int(Velocity.Z));
+	}
+}
+
 function ClientDebugMessage(coerce string S, optional name Type, optional bool bBeep) {
 	if (Level.NetMode == NM_DedicatedServer || Role < ROLE_AutonomousProxy)
 		return;
@@ -6226,7 +6246,11 @@ function IGPlus_CheckClientError() {
 	debugClientForceUpdate = bForceUpdate;
 
 	if (bForceUpdate) {
-		ClientDebugMessage("Send CAP:"@CurrentTimeStamp@Physics@ClientPhysics@ClientLocError@MaxLocError);
+		// (sv, cv: our speed and the one the client's last move reported.)
+		if (bDrawDebugData)
+			ClientDebugMessage("Send CAP:"@CurrentTimeStamp@Physics@ClientPhysics@ClientLocError@MaxLocError
+				@"sv="$int(Velocity.X)$","$int(Velocity.Y)$","$int(Velocity.Z)
+				@"cv="$int(IGPlus_DetClientVel.X)$","$int(IGPlus_DetClientVel.Y)$","$int(IGPlus_DetClientVel.Z));
 		IGPlus_SendCAP();
 	}
 }
@@ -12861,6 +12885,7 @@ ignores SeePlayer, HearNoise, Bump;
 
 		MultiDodgesRemaining = bbPlayerReplicationInfo(PlayerReplicationInfo).MaxMultiDodges;
 
+		IGPlus_MoveDebug("Landed");
 		if (Settings.bDebugMovement && Level.NetMode == NM_Client)
 			ClientDebugMessage("Landed");
 	}
@@ -12878,10 +12903,14 @@ ignores SeePlayer, HearNoise, Bump;
 		local float DodgeZ;
 		local vector OldVel;
 
-		if ( bIsCrouching || (Physics != PHYS_Walking && Physics != PHYS_Falling) )
+		if ( bIsCrouching || (Physics != PHYS_Walking && Physics != PHYS_Falling) ) {
+			IGPlus_MoveDebug("Dodge refused"@DodgeMove);
 			return;
-		if (Physics == PHYS_Falling && bCanWallDodge == false)
+		}
+		if (Physics == PHYS_Falling && bCanWallDodge == false) {
+			IGPlus_MoveDebug("Dodge refused"@DodgeMove);
 			return;
+		}
 
 		OldVel = Velocity;
 		GetAxes(Rotation.Yaw*rot(0,1,0),X,Y,Z);
@@ -12898,8 +12927,10 @@ ignores SeePlayer, HearNoise, Bump;
 			TraceStart = Location - CollisionHeight*vect(0,0,1) + TraceEnd*CollisionRadius;
 			TraceEnd = TraceStart + TraceEnd*32.0;
 			HitActor = Trace(HitLocation, HitNormal, TraceEnd, TraceStart, false, vect(1,1,1));
-			if ((HitActor == none) || (HitActor != Level && Mover(HitActor) == none))
+			if ((HitActor == none) || (HitActor != Level && Mover(HitActor) == none)) {
+				IGPlus_MoveDebug("Dodge refused"@DodgeMove);
 				return;
+			}
 
 			TakeFallingDamage();
 		}
@@ -12933,6 +12964,7 @@ ignores SeePlayer, HearNoise, Bump;
 		DodgeDir = DODGE_Active;
 		bDodging = true;
 		SetPhysics(PHYS_Falling);
+		IGPlus_MoveDebug("Dodge done"@DodgeMove);
 		if (Settings.bDebugMovement && Level.NetMode == NM_Client && bUpdating == false)
 			ClientDebugMessage("Dodged"@DodgeMove@bUpdating@(Rotation.Yaw&0xFFFF)@"|"@int(Location.X)@int(Location.Y)@int(Location.Z)@"|"@int(Velocity.X)@int(Velocity.Y)@int(Velocity.Z)@"|"@int(OldVel.X)@int(OldVel.Y)@int(OldVel.Z));
 	}
@@ -20613,7 +20645,10 @@ function DoJump( optional float F )
 		if ( (Base != Level) && (Base != None) )
 			Velocity.Z += Base.Velocity.Z;
 		SetPhysics(PHYS_Falling);
+		IGPlus_MoveDebug("Jump done");
 	}
+	else
+		IGPlus_MoveDebug("Jump refused");
 }
 
 function PlayInAir() {

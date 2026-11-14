@@ -2369,6 +2369,17 @@ The single lines behind the shot and switch counts are only written while [Trace
 
 Every shot counted in `hitClientOnly`, `hitServerOnly`, `hitDrawnDiff` or `deadShots` also writes one `[DET-HIT]` line. Its first word says which: `clientOnly`, `serverOnly`, `drawnOnly` (only the drawn players were hit), `drawnMissed` (only the drawn players were missed) or `deadShot`. It names the weapon, the nearest player on the server's line, the distance to that player and that player's speed, the rewind used and the shooter's ping. For a `clientOnly` line, `gapXY` and `gapZ` say by how many units the server's line passed that player's rewound body, and `blocked=True` means something solid was in between. `eyeDiff` is the shooter's eye height minus the server's own for that shot. A shooter with `enableDebugData 1` gets the same line on screen.
 
+A player with `enableDebugData 1` also gets lines about their own movement, to show why the server corrected their position:
+
+| Line | Meaning |
+| --- | --- |
+| `Dodge done`, `Dodge refused` | A dodge that happened, or one that could not (in the air with no wall near, or crouching). The number after it is the direction |
+| `Jump done`, `Jump refused` | A jump that happened, or a jump key pressed while not on the ground |
+| `Landed` | A landing |
+| `Send CAP:` | The server corrected the position. The values are the move time, the server's physics, the client's physics, the square of the distance between the two positions, the limit, the server's speed (`sv`) and the speed the client reported (`cv`) |
+
+Each of the first three kinds comes twice: `(client)` for what the player's own game did, and `(server)` for what the server did with the same move. Each side decides on its own copy of the player whether a dodge or a jump is possible. Where a pair differs, one side dodged or jumped alone, and corrections follow until the client has the server's state again, about one ping later.
+
 The IG+ SuperShockRifle and the IG+ sniper start a shot at the shooter's eye. The client sends its eye height with the shot, and the server starts its trace there. Each side works out the eye height on its own, and only the client's follows view shake, so without this the server's line can be above or below the crosshair's line right after a hit, a landing or a step.
 
 # Building
