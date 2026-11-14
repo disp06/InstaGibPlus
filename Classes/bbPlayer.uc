@@ -509,6 +509,7 @@ var string IGPlus_PendPRTReason;
 var int IGPlus_PendVerdict, IGPlus_PendEyeByte;
 var bool IGPlus_bPendPRTInterp, IGPlus_bPendPRTInterpPast, IGPlus_bPendPRTInterpHeld;
 var float IGPlus_PendPRTInterpR;
+var int IGPlus_PendPRTInterpSpan;
 var bool IGPlus_bPendDrawnDiffers;
 var int IGPlus_StatFireShared;       // our shots that waited with another player's shot
 var int IGPlus_StatFireMoved;        // of those, the ones that ran in another place than they arrived in
@@ -969,6 +970,7 @@ var float IGPlus_PRTShotR;           // the tick position this frame's shot repo
 var bool IGPlus_bPRTShotPast;        // and whether the target was drawn past its newest update
 var bool IGPlus_bPRTShotHeld;        // and whether it stood still there, held by the server
 var float IGPlus_PRTShotDelay;       // and how many ticks behind its newest update it was drawn
+var int IGPlus_PRTShotSpan;          // and the two updates it was drawn between
 // Client, on another player's pawn: its last 16 updates with their tick numbers, oldest first from IGPlus_TI_Head - IGPlus_TI_Num.
 // 16 covers the longest delay (IGPLUS_TI_MAX_DELAY) with an update in every tick.
 var int IGPlus_TI_Tick[16];
@@ -983,6 +985,8 @@ var float IGPlus_TI_DrawnR;          // the tick position it was drawn at this f
 var bool IGPlus_TI_bDrawnPast;       // that was past its newest update: it was carried on or stood still
 var float IGPlus_ShownR;             // the same two for the last frame that was drawn (PreRender)
 var bool IGPlus_bShownPast;
+var int IGPlus_TI_DrawnSpan;         // the two updates it was drawn between this frame (IGPlus_TI_Span)
+var int IGPlus_ShownSpan;            // and in the last frame that was drawn
 var bool IGPlus_TI_bDrawnHeld;       // drawn past its newest update while the server holds it still: not carried on
 var bool IGPlus_bShownHeld;
 var bool IGPlus_TI_bStopped;         // the body stands still this frame: held, or the carry has run out
@@ -1014,6 +1018,7 @@ var float IGPlus_TI_StNextLine, IGPlus_TI_StSince;
 // Server: the last report was a tick position (IGPlus_PRTNoteInterp).
 var bool IGPlus_bPRTInterp, IGPlus_bPRTInterpPast, IGPlus_bPRTInterpHeld;
 var float IGPlus_PRTInterpR;
+var int IGPlus_PRTInterpSpan;        // and the two updates the target was drawn between (IGPlus_TI_Span)
 // Server: how far behind their newest update the shooter's screen drew the
 // player they aimed at, from the same report. New projectiles of theirs are
 // moved ahead by this as well (IGPlus_WeaponImplementationBase.IGPlus_GetTickInterpDelayMs).
@@ -3734,21 +3739,27 @@ static function int IGPlus_PRTPack(int Tick, float Age) {
 	// (The top bit stays clear: it marks a tick position, IGPlus_TI_Pack.)
 	return (Tick & 0x7FFF) | 0x8000 | (Clamp(int(Age * 10000.0), 0, 0x7FFF) << 16);
 }
-// Tick Interpolation: the tick position the screen drew at. 15 bits of the
+// Tick Interpolation: the tick position the screen drew at. 11 bits of the
 // tick number, 8 bits of the way to the next tick, and the top bit as mark.
+// Span, bits 11 to 14: the two updates the player was drawn between
+// (IGPlus_TI_SpanAt). A client reads a player's update once per frame, so two
+// updates in one frame, or a lost packet, leave a tick out of the updates it
+// has, and it draws across the gap. The server then stands the player between
+// the same two snapshots (UTPlusDummy.CompStartTick), not the two next to
+// each other.
 // bPast: the player was drawn past their newest update (carried on, or
 // standing still). The server then has to do the same, and not use an update
 // that reached us later.
 // bHeld: and there they stood still, because the server said it holds them.
 // Delay: how many ticks behind their newest update that player was drawn, in
 // half ticks in bits 26 to 30. The server moves our new projectiles ahead by it.
-static function int IGPlus_TI_Pack(float R, optional bool bPast, optional bool bHeld, optional float Delay) {
+static function int IGPlus_TI_Pack(float R, optional bool bPast, optional bool bHeld, optional float Delay, optional int Span) {
 	local int T, D;
 
 	if (R < 0.0)
 		R = 0.0;
 	T = int(R);
-	D = (T & 0x7FFF) | 0x8000 | ((Clamp(int((R - float(T)) * 256.0), 0, 255)) << 16) | (1 << 31);
+	D = (T & 0x7FF) | ((Span & 15) << 11) | 0x8000 | ((Clamp(int((R - float(T)) * 256.0), 0, 255)) << 16) | (1 << 31);
 	if (bPast)
 		D = D | (1 << 24);
 	if (bPast && bHeld)
@@ -3759,6 +3770,17 @@ static function int IGPlus_TI_Pack(float R, optional bool bPast, optional bool b
 // The server's reading of the delay, in ticks.
 static function float IGPlus_TI_UnpackDelay(int Data) {
 	return float((Data >>> 26) & 0x1F) * 0.5;
+}
+// The two updates a player was drawn between at tick position R, as one
+// number: in the low 2 bits how many ticks before R's tick the older one is,
+// in the next 2 bits how many ticks after the tick that follows R's the newer
+// one is. 3 stands for 3 or more. 0 is the usual case: an update for R's tick
+// and one for the next.
+static function int IGPlus_TI_Span(int RTick, int TickA, int TickB) {
+	return Clamp(RTick - TickA, 0, 3) | (Clamp(TickB - RTick - 1, 0, 3) << 2);
+}
+static function int IGPlus_TI_UnpackSpan(int Data) {
+	return (Data >>> 11) & 15;
 }
 // How many ticks a player is carried on by their velocity, Past ticks after
 // their newest update. None while the server holds them still (Adaptive
@@ -3789,7 +3811,7 @@ static function float IGPlus_TI_CarryTicks(float Past, bool bHeld) {
 }
 // The server's reading of it. NowTick is the server's newest tick number.
 static function float IGPlus_TI_Unpack(int Data, int NowTick) {
-	return float(NowTick - ((NowTick - (Data & 0x7FFF)) & 0x7FFF)) + float((Data >>> 16) & 0xFF) / 256.0;
+	return float(NowTick - ((NowTick - (Data & 0x7FF)) & 0x7FF)) + float((Data >>> 16) & 0xFF) / 256.0;
 }
 
 // How many of our ticks ago the report's update was sent (the newest tick
@@ -3856,6 +3878,7 @@ function IGPlus_PRTNoteInterp(int Data, WeaponSettingsRepl WS) {
 	IGPlus_bPRTInterpPast = (Data & (1 << 24)) != 0;
 	IGPlus_bPRTInterpHeld = (Data & (1 << 25)) != 0;
 	IGPlus_PRTInterpR = IGPlus_TI_Unpack(Data, G);
+	IGPlus_PRTInterpSpan = IGPlus_TI_UnpackSpan(Data);
 	IGPlus_PRTInterpDelayMs = 1000.0 * FMin(IGPlus_TI_UnpackDelay(Data), IGPLUS_TI_MAX_DELAY) * TickLen / Level.TimeDilation;
 	IGPlus_PRTNoteTS = Level.TimeSeconds;
 	IGPlus_PRTNoteTick = IGPlus_PRTServerTick;
@@ -3867,7 +3890,7 @@ function IGPlus_PRTNoteInterp(int Data, WeaponSettingsRepl WS) {
 	MaxLag = IGPlus_PRTServerPing + 1000.0 * (IGPLUS_TI_MAX_DELAY + 2.0) * TickLen / Level.TimeDilation;
 	if (WS == none || WS.bEnablePreciseRewindTime == false)
 		IGPlus_PRTReason = "off";
-	else if (float(G) - IGPlus_PRTInterpR > 16000.0)
+	else if (float(G) - IGPlus_PRTInterpR > 1000.0)
 		IGPlus_PRTReason = "update too old";
 	else if (IGPlus_PRTLagMs < -50)
 		IGPlus_PRTReason = "report ahead of our clock";
@@ -6826,6 +6849,7 @@ function bool IGPlus_QueueShot(Weapon W, rotator View, vector Loc) {
 	IGPlus_bPendPRTInterpPast = IGPlus_bPRTInterpPast;
 	IGPlus_bPendPRTInterpHeld = IGPlus_bPRTInterpHeld;
 	IGPlus_PendPRTInterpR = IGPlus_PRTInterpR;
+	IGPlus_PendPRTInterpSpan = IGPlus_PRTInterpSpan;
 	IGPlus_PendVerdict = IGPlus_ClientHitVerdict;
 	IGPlus_bPendDrawnDiffers = IGPlus_bShotDrawnDiffers;
 	IGPlus_PendEyeByte = IGPlus_ShotEyeByte;
@@ -6837,7 +6861,7 @@ function bool IGPlus_QueueShot(Weapon W, rotator View, vector Loc) {
 function IGPlus_RunPendingShot() {
 	local Weapon W;
 	local float NoteTS, SeenTime, ViewTime, LagMs;
-	local int NoteTick, Verdict, EyeByte;
+	local int NoteTick, Verdict, EyeByte, InterpSpan;
 	local string Reason;
 	local bool bDrawnDiffers, bInterp, bInterpPast, bInterpHeld;
 	local float InterpR;
@@ -6870,6 +6894,7 @@ function IGPlus_RunPendingShot() {
 	bInterpPast = IGPlus_bPRTInterpPast;
 	bInterpHeld = IGPlus_bPRTInterpHeld;
 	InterpR = IGPlus_PRTInterpR;
+	InterpSpan = IGPlus_PRTInterpSpan;
 	Verdict = IGPlus_ClientHitVerdict;
 	bDrawnDiffers = IGPlus_bShotDrawnDiffers;
 	EyeByte = IGPlus_ShotEyeByte;
@@ -6884,6 +6909,7 @@ function IGPlus_RunPendingShot() {
 	IGPlus_bPRTInterpPast = IGPlus_bPendPRTInterpPast;
 	IGPlus_bPRTInterpHeld = IGPlus_bPendPRTInterpHeld;
 	IGPlus_PRTInterpR = IGPlus_PendPRTInterpR;
+	IGPlus_PRTInterpSpan = IGPlus_PendPRTInterpSpan;
 	IGPlus_ClientHitVerdict = IGPlus_PendVerdict;
 	IGPlus_bShotDrawnDiffers = IGPlus_bPendDrawnDiffers;
 	IGPlus_ShotEyeByte = IGPlus_PendEyeByte;
@@ -6903,6 +6929,7 @@ function IGPlus_RunPendingShot() {
 	IGPlus_bPRTInterpPast = bInterpPast;
 	IGPlus_bPRTInterpHeld = bInterpHeld;
 	IGPlus_PRTInterpR = InterpR;
+	IGPlus_PRTInterpSpan = InterpSpan;
 	IGPlus_ClientHitVerdict = Verdict;
 	IGPlus_bShotDrawnDiffers = bDrawnDiffers;
 	IGPlus_ShotEyeByte = EyeByte;
@@ -7623,6 +7650,7 @@ function IGPlus_ClientShotTraceDebug(Actor Other, Actor Drawn, bool bRule, vecto
 	// that was past their newest update, that update's tick, and their delay.
 	if (IGPlus_EnableTickInterp)
 		S = S@"shownR="$Best.IGPlus_ShownR@"past="$Best.IGPlus_bShownPast@"held="$Best.IGPlus_bShownHeld@"duck="$Best.IGPlus_ShownDuck
+			@"ticks="$(int(Best.IGPlus_ShownR) - (Best.IGPlus_ShownSpan & 3))$"-"$(int(Best.IGPlus_ShownR) + 1 + ((Best.IGPlus_ShownSpan >> 2) & 3))
 			@"newTick="$Best.IGPlus_TI_Tick[(Best.IGPlus_TI_Head - 1) & 15]@"delay="$IGPlus_Fmt1(Best.IGPlus_TI_Delay)
 			@"tickMs="$IGPlus_Fmt1(1000.0 * IGPlus_TI_TickLen);
 	ClientDebugMessage("Own trace:"@S);
@@ -7770,6 +7798,7 @@ function Actor IGPlus_ClientShotTrace(
 				IGPlus_bPRTShotPast = ShotTarget.IGPlus_bShownPast;
 				IGPlus_bPRTShotHeld = ShotTarget.IGPlus_bShownHeld;
 				IGPlus_PRTShotDelay = ShotTarget.IGPlus_TI_Delay;
+				IGPlus_PRTShotSpan = ShotTarget.IGPlus_ShownSpan;
 			}
 		} else {
 			// The same frame for every player: the engine moves them all on.
@@ -10327,9 +10356,9 @@ function xxReplicateMove(
 		if ((bDetLocalShot && IGPlus_PRTShotR > 0.0) == false)
 			AimTarget = IGPlus_TI_AimTarget();
 		if (bDetLocalShot && IGPlus_PRTShotR > 0.0)
-			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(IGPlus_PRTShotR, IGPlus_bPRTShotPast, IGPlus_bPRTShotHeld, IGPlus_PRTShotDelay);
+			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(IGPlus_PRTShotR, IGPlus_bPRTShotPast, IGPlus_bPRTShotHeld, IGPlus_PRTShotDelay, IGPlus_PRTShotSpan);
 		else if (AimTarget != None)
-			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(AimTarget.IGPlus_ShownR, AimTarget.IGPlus_bShownPast, AimTarget.IGPlus_bShownHeld, AimTarget.IGPlus_TI_Delay);
+			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(AimTarget.IGPlus_ShownR, AimTarget.IGPlus_bShownPast, AimTarget.IGPlus_bShownHeld, AimTarget.IGPlus_TI_Delay, AimTarget.IGPlus_ShownSpan);
 		else
 			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(IGPlus_TI_Clock - IGPLUS_TI_MIN_DELAY, false, false, IGPLUS_TI_MIN_DELAY);
 	} else if (IGPlus_PRTSeenAt > 0 && IGPlus_PRTShownTick != 0) {
@@ -10343,6 +10372,7 @@ function xxReplicateMove(
 	IGPlus_bPRTShotPast = false;
 	IGPlus_bPRTShotHeld = false;
 	IGPlus_PRTShotDelay = 0.0;
+	IGPlus_PRTShotSpan = 0;
 	// Only the shot frame's move (a single frame) carries the aimed view, so
 	// nothing else (dodges, other weapons) sees it.
 	if (bPSAAimFix && bDetLocalShot)
@@ -14585,6 +14615,7 @@ event PreRender( canvas zzCanvas )
 				bbPlayer(zzPRI.Owner).IGPlus_ShownFrame = IGPlus_FrameCount;
 				bbPlayer(zzPRI.Owner).IGPlus_ShownR = bbPlayer(zzPRI.Owner).IGPlus_TI_DrawnR;
 				bbPlayer(zzPRI.Owner).IGPlus_bShownPast = bbPlayer(zzPRI.Owner).IGPlus_TI_bDrawnPast;
+				bbPlayer(zzPRI.Owner).IGPlus_ShownSpan = bbPlayer(zzPRI.Owner).IGPlus_TI_DrawnSpan;
 				bbPlayer(zzPRI.Owner).IGPlus_bShownHeld = bbPlayer(zzPRI.Owner).IGPlus_TI_bDrawnHeld;
 				bbPlayer(zzPRI.Owner).IGPlus_ShownDuck = bbPlayer(zzPRI.Owner).IGPlus_TI_DrawnDuck;
 			}
@@ -15034,6 +15065,26 @@ simulated function vector IGPlus_TI_Sample(float R, float TickLen, optional bool
 	return IGPlus_TI_Loc[(IGPlus_TI_Head - IGPlus_TI_Num) & 15];
 }
 
+// The two updates IGPlus_TI_Sample draws between at tick position R, for the
+// shot's report (IGPlus_TI_Span). Past the newest update there is only the
+// older one, the one the player is carried on from.
+simulated function int IGPlus_TI_SpanAt(float R) {
+	local int i, A, B;
+
+	if (IGPlus_TI_Num == 0)
+		return 0;
+	B = (IGPlus_TI_Head - 1) & 15;
+	if (R >= float(IGPlus_TI_Tick[B]))
+		return IGPlus_TI_Span(int(R), IGPlus_TI_Tick[B], int(R) + 1);
+	for (i = IGPlus_TI_Num - 1; i > 0; i--) {
+		B = (IGPlus_TI_Head - IGPlus_TI_Num + i) & 15;
+		A = (B - 1) & 15;
+		if (R >= float(IGPlus_TI_Tick[A]))
+			return IGPlus_TI_Span(int(R), IGPlus_TI_Tick[A], IGPlus_TI_Tick[B]);
+	}
+	return 0;
+}
+
 // The crouch at tick position R: the one that came with the older of the two
 // updates around R. The server takes it from the older snapshot too
 // (UTPlusDummy.CompSwap), so a hit near the top of a crouching player is
@@ -15289,6 +15340,7 @@ simulated function IGPlus_TI_After(float DeltaTime) {
 	IGPlus_TI_bStopped = IGPlus_TI_bDrawnPast
 		&& (IGPlus_TI_bDrawnHeld || IGPlus_TI_DrawnR - Newest >= IGPLUS_TI_MAX_CARRY);
 	IGPlus_TI_DrawnDuck = IGPlus_TI_DuckAt(IGPlus_TI_DrawnR);
+	IGPlus_TI_DrawnSpan = IGPlus_TI_SpanAt(IGPlus_TI_DrawnR);
 	bCollideWorld = false;
 	SetLocation(IGPlus_TI_Sample(IGPlus_TI_DrawnR, TickLen, IGPlus_TI_bDrawnHeld));
 	bCollideWorld = true;

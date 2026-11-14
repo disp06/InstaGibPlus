@@ -270,13 +270,22 @@ function CompStartSeen(float SeenTime, float ViewTime) {
 // left out. bHeld: the client drew them standing still there, because we had
 // told it that we hold them (Adaptive Buffering). That is only taken when a
 // hold of ours did follow that snapshot.
-function CompStartTick(float R, float TickLen, optional bool bPast, optional bool bHeld) {
-	local int Idx, Scans;
+// Span: the two updates the client drew between (bbPlayer.IGPlus_TI_Span).
+// Its older one is Span & 3 ticks before R's tick, its newer one
+// (Span >> 2) & 3 ticks after the tick that follows. A snapshot of ours
+// between those two never reached that client (two updates in one of its
+// frames, or a lost packet), so it is left out here too. 0: the snapshot of
+// R's tick and the next one.
+function CompStartTick(float R, float TickLen, optional bool bPast, optional bool bHeld, optional int Span) {
+	local int Idx, Scans, TickA, TickB;
 	local UTPlusSnapshot Snap, A, B;
 	local bool bHoldAfter;
 
 	if (Actual == none || Actual.bDeleteMe || Actual.Health <= 0)
 		return;
+
+	TickA = int(R) - (Span & 3);
+	TickB = int(R) + 1 + ((Span >> 2) & 3);
 
 	Idx = DataIndex;
 	for (Scans = 0; Scans < arraycount(Data); Scans++) {
@@ -290,11 +299,12 @@ function CompStartTick(float R, float TickLen, optional bool bPast, optional boo
 			bHoldAfter = Snap.bHeld;
 			continue;
 		}
-		if (float(Snap.Tick) <= R) {
+		if (Snap.Tick <= TickA) {
 			A = Snap;
 			break;
 		}
-		B = Snap;
+		if (Snap.Tick >= TickB)
+			B = Snap;
 		bHoldAfter = false;
 	}
 	CompTickA = 0;

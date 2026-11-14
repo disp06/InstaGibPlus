@@ -1911,6 +1911,7 @@ How it works:
 
 * The server numbers its ticks. With each player it sends the number of the tick that player's last move ran in, and where the player stood at the end of that tick. That costs about 10 bytes for each other player in each tick.
 * The engine sends a position rounded to whole units, so the client draws and tests a player between whole-unit spots. The server tests a shot against the same rounded spots. Tested against its exact spots, a shot that grazed a player by under half a unit could count on one side and miss on the other.
+* A client reads a player's update once per frame. When two updates arrive in one frame, or a packet is lost, it has no update for one tick and draws that player across the gap. A shot reports which two updates its target was drawn between, and the server stands the players between the same two, not between the two snapshots next to each other.
 * The client keeps each player's last 16 updates. It draws a player behind the server's tick clock by the gap between that player's updates plus one tick, 2 ticks at least and 10 at most.
 * Two updates too far apart to be movement, as after a teleporter, are not drawn as a slide. The player stays at the older one until the newer one's tick.
 * Past a player's newest update the client carries them on by their velocity for at most 2 ticks. Then they stand still until the next update arrives. The shot tells the server when that was the case.

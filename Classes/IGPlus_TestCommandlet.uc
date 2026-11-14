@@ -298,6 +298,22 @@ function TestTickInterp() {
 	// A stall of 10 ticks at a dodge's speed is movement, not a teleport.
 	LogTestResult(class'bbPlayer'.static.IGPlus_TI_IsJump(vect(0,0,0), vect(100,0,0), 10, 0.01) == false,
 		"TickInterp_a_long_gap_at_speed_is_still_movement");
+	// The two updates a player was drawn between ride in 4 bits of the report.
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_Span(1915, 1915, 1916) == 0
+		&& class'bbPlayer'.static.IGPlus_TI_Span(1915, 1915, 1917) == 4
+		&& class'bbPlayer'.static.IGPlus_TI_Span(1915, 1914, 1916) == 1
+		&& class'bbPlayer'.static.IGPlus_TI_Span(1915, 1900, 1930) == 15,
+		"TickInterp_the_two_updates_drawn_between_are_counted_from_the_tick_position");
+	P = class'bbPlayer'.static.IGPlus_TI_Pack(70000.5, true, false, 2.5, 6);
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_UnpackSpan(P) == 6
+		&& Abs(class'bbPlayer'.static.IGPlus_TI_Unpack(P, 70003) - 70000.5) < 0.005
+		&& Abs(class'bbPlayer'.static.IGPlus_TI_UnpackDelay(P) - 2.5) < 0.01 && (P & (1 << 24)) != 0,
+		"TickInterp_the_report_carries_the_two_updates_next_to_its_other_parts");
+	// 11 bits of the tick number: a report from just before the count wraps is still read right.
+	P = class'bbPlayer'.static.IGPlus_TI_Pack(2046.25);
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_TI_Unpack(P, 2050) - 2046.25) < 0.005
+		&& class'bbPlayer'.static.IGPlus_TI_UnpackSpan(P) == 0,
+		"TickInterp_a_report_from_before_the_tick_count_wraps_is_read_right");
 	// The server tests a shot against the spot as the client got it: in whole units.
 	LogTestResult(class'bbPlayer'.static.IGPlus_TI_WireLoc(vect(2317.04,-126.51,-212.2)) == vect(2317,-127,-212),
 		"TickInterp_the_server_rounds_a_spot_as_the_engine_sends_it");

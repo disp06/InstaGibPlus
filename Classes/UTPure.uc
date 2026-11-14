@@ -773,7 +773,7 @@ function CompensateFor(int Ping, optional Pawn Instigator, optional bool bHitsca
 		// Tick Interpolation: between the two snapshots the shooter's screen
 		// drew the shot's target between.
 		if (PRT.IGPlus_bPRTInterp)
-			D.CompStartTick(PRT.IGPlus_PRTInterpR, FMax(PRT.AverageServerDeltaTime, 0.001), PRT.IGPlus_bPRTInterpPast, PRT.IGPlus_bPRTInterpHeld);
+			D.CompStartTick(PRT.IGPlus_PRTInterpR, FMax(PRT.AverageServerDeltaTime, 0.001), PRT.IGPlus_bPRTInterpPast, PRT.IGPlus_bPRTInterpHeld, PRT.IGPlus_PRTInterpSpan);
 		else
 			D.CompStartSeen(PRT.IGPlus_PRTSeenTime, PRT.IGPlus_PRTViewTimeNow());
 		if (PRTDebug != none && Moved == 0 && D.bCompActive) {
