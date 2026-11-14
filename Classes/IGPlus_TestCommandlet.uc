@@ -279,6 +279,14 @@ function TestTickInterp() {
 		"TickInterp_carry_stops_after_two_ticks");
 	LogTestResult(class'bbPlayer'.static.IGPlus_TI_CarryTicks(1.25, true) == 0.0,
 		"TickInterp_a_held_player_is_not_carried_on");
+	// 25 units in one 10 ms tick is a fall at 2500 units a second.
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_IsJump(vect(0,0,0), vect(0,0,-25), 1, 0.01) == false,
+		"TickInterp_fast_movement_is_drawn_between_its_updates");
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_IsJump(vect(0,0,0), vect(300,0,0), 1, 0.01),
+		"TickInterp_a_teleport_is_not_drawn_as_a_slide");
+	// A stall of 10 ticks at a dodge's speed is movement, not a teleport.
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_IsJump(vect(0,0,0), vect(100,0,0), 10, 0.01) == false,
+		"TickInterp_a_long_gap_at_speed_is_still_movement");
 }
 
 // Where the client's own trace stands another player (bbPlayer.IGPlus_PRTRulePos).

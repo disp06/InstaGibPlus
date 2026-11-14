@@ -1912,12 +1912,26 @@ How it works:
 
 * The server numbers its ticks. With each player it sends the number of the tick that player's last move ran in, and where the player stood at the end of that tick. That costs about 10 bytes for each other player in each tick.
 * The client keeps each player's last 16 updates. It draws a player behind the server's tick clock by the gap between that player's updates plus one tick, 2 ticks at least and 10 at most.
+* Two updates too far apart to be movement, as after a teleporter, are not drawn as a slide. The player stays at the older one until the newer one's tick.
 * Past a player's newest update the client carries them on by their velocity for at most 2 ticks. Then they stand still until the next update arrives. The shot tells the server when that was the case.
 * A player the server holds still is not carried on at all. That is a player whose queue ran empty with [bEnableAdaptiveBuffering](#benableadaptivebuffering) on. The server says so, and the shot tells the server that the player was drawn standing.
 * The animation is drawn from the same moment as the body. The client notes the animation the engine plays in every frame and shows the one from as long ago as the body is drawn behind.
 * A hit test takes the crouch that came with the update the body is drawn from, as the server takes it from its snapshot of that tick.
 * While a player's body stands still because their updates stopped, their animation stands still too and they make no footstep sounds.
 * The client's own trace for the instant hit sound tests the players where the last frame drew them.
+
+A player with `enableDebugData 1` gets one `Tick Interpolation:` line in the debug log for every other player every 30 seconds:
+
+| Field | Meaning |
+| --- | --- |
+| `frames`, `updates` | Frames that player was drawn in, and updates that arrived |
+| `past` | Share of frames drawn past the newest update |
+| `stopped` | Share of frames the body stood still because no update was there |
+| `held` | Share of frames the server held the player still |
+| `delayMsAvg`, `delayMsMax` | How far behind the newest update the player was drawn |
+| `gapTicksMax` | The longest gap between two updates, in server ticks |
+| `back1`, `back3`, `backMax` | Frames that moved the body backwards by over 1 and over 3 units, and the largest such step |
+| `resets`, `clockSnaps` | Times the stored updates were thrown away, and times the tick clock jumped |
 
 A client's Location Offset Fix setting has no effect while this is on. The picture is later than without it, by the delay above. A player whose packets stall is drawn standing still for a moment and then catches up. [bEnableAdaptiveBuffering](#benableadaptivebuffering) evens that out on the server.
 
@@ -1935,6 +1949,8 @@ Without it the server runs a shot the moment it reads the shot's packet. Two sho
 If set to `True`, the server notes the rifle and sniper shots of a tick and runs them once all of the tick's packets are read, the one fired first first. The fire time is the time stamp of the shot's move on the server's clock, plus half of the shooter's lowest ping of late. Two shots less than 2 ms apart keep the order they arrived in. A shooter killed by an earlier shot of the same tick loses his own shot, unless [bEnableTrades](#benabletrades) is on.
 
 It adds no delay. A shot is still traced in the tick it arrived in. `fireShared` and `fireMoved` in the `[DET-SUMMARY]` line count how often it had something to do.
+
+The server log gets one `[FIRE-ORDER]` line for each tick in which two or more such shots met. It lists the shooters in the order their shots ran, each with `agoMs`, how long before the tick the server reckons the shot was fired, and `arrived`, the place its packet had.
 
 ## KillCamDelay
 

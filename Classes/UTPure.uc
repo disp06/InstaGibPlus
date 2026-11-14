@@ -480,6 +480,7 @@ function IGPlus_FlushShots() {
 	local bbPlayer P;
 	local int Arrived[32];
 	local int k;
+	local string S;
 
 	if (IGPlus_ShotQueueNum == 0 || IGPlus_bShotFlush)
 		return;
@@ -510,7 +511,15 @@ function IGPlus_FlushShots() {
 			IGPlus_ShotQueue[i].IGPlus_StatFireShared++;
 			if (Arrived[i] != i)
 				IGPlus_ShotQueue[i].IGPlus_StatFireMoved++;
+			// One line for the tick: who fired how long ago by our reckoning,
+			// in the order the shots run. arrived is the place its packet had.
+			if (i < 4 && IGPlus_ShotQueue[i].PlayerReplicationInfo != None)
+				S = S@IGPlus_ShotQueue[i].PlayerReplicationInfo.PlayerName
+					@"agoMs="$class'bbPlayer'.static.IGPlus_Fmt1(1000.0 * IGPlus_ShotQueue[i].IGPlus_PendShotAgo / Level.TimeDilation)
+					@"arrived="$(Arrived[i] + 1);
 		}
+		if (IGPlus_ShotQueue[0] != None)
+			IGPlus_ShotQueue[0].IGPlus_EventLog("[FIRE-ORDER] tick="$IGPlus_GlobalTick@"shots="$Num@"ran:"$S);
 	}
 	for (i = 0; i < Num; i++) {
 		P = IGPlus_ShotQueue[i];

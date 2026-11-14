@@ -998,6 +998,17 @@ var int IGPlus_TI_AnimHead, IGPlus_TI_AnimNum;
 var name IGPlus_TI_RawSeq, IGPlus_TI_ShownSeq;
 var float IGPlus_TI_RawFrame, IGPlus_TI_ShownFrame;
 var bool IGPlus_TI_bAnimSwapped;
+// Client, with enableDebugData on: how Tick Interpolation drew this player
+// since the last "Tick Interpolation:" line (IGPlus_TI_Stat, IGPlus_TI_LogStats).
+var int IGPlus_TI_StFrames, IGPlus_TI_StPast, IGPlus_TI_StStopped, IGPlus_TI_StHeld;
+var int IGPlus_TI_StUpdates, IGPlus_TI_StResets, IGPlus_TI_StBack1, IGPlus_TI_StBack3;
+var float IGPlus_TI_StDelaySum, IGPlus_TI_StDelayMax, IGPlus_TI_StGapMax, IGPlus_TI_StBackMax;
+var vector IGPlus_TI_StPrevLoc, IGPlus_TI_StPrevStep;
+var float IGPlus_TI_StPrevTime, IGPlus_TI_StPrevDt;
+var bool IGPlus_TI_StHavePrev;
+// On our own pawn: clock jumps since the last line, and when the next line is due.
+var int IGPlus_TI_StClockSnaps;
+var float IGPlus_TI_StNextLine, IGPlus_TI_StSince;
 // Server: the last report was a tick position (IGPlus_PRTNoteInterp).
 var bool IGPlus_bPRTInterp, IGPlus_bPRTInterpPast, IGPlus_bPRTInterpHeld;
 var float IGPlus_PRTInterpR;
@@ -3740,6 +3751,12 @@ static function int IGPlus_TI_Pack(float R, optional bool bPast, optional bool b
 // their newest update. None while the server holds them still (Adaptive
 // Buffering, their queue ran empty): it says so, and a guess would have to be
 // taken back when their next update comes. Client and server both use this.
+// Two updates too far apart to be movement: a teleporter, a translocation or
+// a respawn. The player is not drawn sliding from one to the other. They stay
+// at the older one until the newer one's tick. Client and server both use this.
+static function bool IGPlus_TI_IsJump(vector A, vector B, int Ticks, float TickLen) {
+	return VSize(B - A) > 100.0 + 4000.0 * float(Ticks) * TickLen;
+}
 static function float IGPlus_TI_CarryTicks(float Past, bool bHeld) {
 	if (bHeld || Past <= 0.0)
 		return 0.0;
@@ -7841,7 +7858,7 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 		if (zzUTPure != None)
 			D = zzUTPure.FindDummy(Best);
 		if (D != None)
-			S = S@"srvLoc="$IGPlus_FmtVec1(D.Location)@"srvVel="$IGPlus_FmtVec1(D.Velocity);
+			S = S@"srvLoc="$IGPlus_FmtVec1(D.Location)@"srvVel="$IGPlus_FmtVec1(D.Velocity)@"srvDuck="$int(255.0 * D.DuckFraction);
 		// srvGap: how old our snapshot of that player was at the time the
 		// shooter saw. srvCarry: for how long we carried it on.
 		if (IGPlus_PRTUsable()) {
@@ -13833,10 +13850,20 @@ function xxPlayerTickEvents(float DeltaTime)
 			}
 			TITarget = float(IGPlus_TI_SeenTick) + (CurrentTime - IGPlus_TI_SeenAt) / IGPlus_TI_TickLen;
 			IGPlus_TI_Clock += DeltaTime / IGPlus_TI_TickLen;
-			if (Abs(TITarget - IGPlus_TI_Clock) > 5.0)
+			if (Abs(TITarget - IGPlus_TI_Clock) > 5.0) {
 				IGPlus_TI_Clock = TITarget;
-			else
+				IGPlus_TI_StClockSnaps++;
+			} else {
 				IGPlus_TI_Clock += (TITarget - IGPlus_TI_Clock) * 0.1;
+			}
+			// enableDebugData: one line per other player every 30 seconds.
+			if (bDrawDebugData && Level.TimeSeconds >= IGPlus_TI_StNextLine) {
+				IGPlus_TI_LogStats(IGPlus_TI_StNextLine > 0.0);
+				IGPlus_TI_StNextLine = Level.TimeSeconds + 30.0 * Level.TimeDilation;
+				IGPlus_TI_StSince = Level.TimeSeconds;
+			} else if (bDrawDebugData == false) {
+				IGPlus_TI_StNextLine = 0.0;
+			}
 		}
 		if (IGPlus_DetServerShotTS != IGPlus_DetServerShotSeen) {
 			IGPlus_DetServerShotSeen = IGPlus_DetServerShotTS;
@@ -14761,14 +14788,13 @@ simulated function IGPlus_LocationOffsetFix_After(float DeltaTime) {
 	}
 
 	// The offset above compares the new update with the drawn body as if the
-	// body had stood still for this frame. So every update set the body back
-	// by one frame of movement, and the smoothing below let it catch up only
-	// in part: the body trailed its real spot the whole time it moved (two
-	// players' logs, Nov 13 2026: by a median 10 and 12 ms of movement at 480
-	// frames a second. A rig at 100 frames a second: 35 to 57 ms). The body
-	// is carried on by this frame first, as in a frame with no update.
-	if (bReplicatedLocation)
-		IGPlus_LocationOffsetFix_PredictionOffset += VelXpol * DeltaTime;
+	// body had stood still for this frame, so the drawn body trails its real
+	// spot while it moves (two players' logs, Nov 13 2026: by a median 10 and
+	// 12 ms of movement at 480 frames a second). Carrying the body on by this
+	// frame first puts it on the server's spot, but then it snaps back by up
+	// to 12 units when the player turns (rig, Nov 14 2026: 31 to 33 steps of
+	// over 3 units in 55 s, against 2 without). So the trailing stays here.
+	// Tick Interpolation draws the exact spot without a snap.
 
 	// dont let misprediction grow too large
 	// also, dont smoothly relocate teleporting players
@@ -14922,6 +14948,8 @@ simulated function vector IGPlus_TI_Sample(float R, float TickLen, optional bool
 		if (R >= float(IGPlus_TI_Tick[A])) {
 			if (IGPlus_TI_Tick[B] <= IGPlus_TI_Tick[A])
 				return IGPlus_TI_Loc[B];
+			if (IGPlus_TI_IsJump(IGPlus_TI_Loc[A], IGPlus_TI_Loc[B], IGPlus_TI_Tick[B] - IGPlus_TI_Tick[A], TickLen))
+				return IGPlus_TI_Loc[A];
 			return IGPlus_TI_Loc[A] + (IGPlus_TI_Loc[B] - IGPlus_TI_Loc[A])
 				* ((R - float(IGPlus_TI_Tick[A])) / float(IGPlus_TI_Tick[B] - IGPlus_TI_Tick[A]));
 		}
@@ -14955,6 +14983,105 @@ simulated function float IGPlus_HitDuckFraction() {
 	if (IGPlus_TI_Use() && IGPlus_TI_Num > 0)
 		return float(IGPlus_ShownDuck) / 255.0;
 	return float(DuckFractionRepl) / 255.0;
+}
+
+// Client, on another player's pawn, with enableDebugData on: counts for the
+// "Tick Interpolation:" line. A backward step is a frame that moves the drawn
+// body against its movement of the frame before, measured in units along it.
+simulated function IGPlus_TI_Stat() {
+	local vector Step;
+	local float Dt, Len, S;
+
+	if (bHidden || Health <= 0) {
+		IGPlus_TI_StHavePrev = false;
+		return;
+	}
+	IGPlus_TI_StFrames++;
+	if (IGPlus_TI_bDrawnPast)
+		IGPlus_TI_StPast++;
+	if (IGPlus_TI_bStopped)
+		IGPlus_TI_StStopped++;
+	if (IGPlus_TI_bDrawnHeld)
+		IGPlus_TI_StHeld++;
+	IGPlus_TI_StDelaySum += IGPlus_TI_Delay;
+	IGPlus_TI_StDelayMax = FMax(IGPlus_TI_StDelayMax, IGPlus_TI_Delay);
+	IGPlus_TI_StGapMax = FMax(IGPlus_TI_StGapMax, IGPlus_TI_Gap);
+
+	Dt = Level.TimeSeconds - IGPlus_TI_StPrevTime;
+	Step = Location - IGPlus_TI_StPrevLoc;
+	Step.Z = 0;
+	// Not across a long frame, a respawn or a translocation.
+	if (IGPlus_TI_StHavePrev && Dt > 0.0 && Dt < 0.05 && VSize(Step) < 60.0) {
+		Len = VSize(IGPlus_TI_StPrevStep);
+		// Only while they were moving, at over 100 units a second.
+		if (Len > 100.0 * IGPlus_TI_StPrevDt && Len > 0.0) {
+			S = (Step dot IGPlus_TI_StPrevStep) / Len;
+			if (S < -1.0)
+				IGPlus_TI_StBack1++;
+			if (S < -3.0)
+				IGPlus_TI_StBack3++;
+			IGPlus_TI_StBackMax = FMax(IGPlus_TI_StBackMax, -S);
+		}
+		IGPlus_TI_StPrevStep = Step;
+		IGPlus_TI_StPrevDt = Dt;
+	} else {
+		IGPlus_TI_StPrevStep = vect(0,0,0);
+		IGPlus_TI_StPrevDt = 0.0;
+	}
+	IGPlus_TI_StPrevLoc = Location;
+	IGPlus_TI_StPrevTime = Level.TimeSeconds;
+	IGPlus_TI_StHavePrev = true;
+}
+
+// Client, on our own pawn: writes the "Tick Interpolation:" line of every
+// other player to the debug log and starts their counts again. bWrite false
+// only starts them again (debug data was just turned on).
+function IGPlus_TI_LogStats(bool bWrite) {
+	local int i;
+	local PlayerReplicationInfo PRI;
+	local bbPlayer P;
+	local float F, Ms;
+
+	if (GameReplicationInfo == None)
+		return;
+	Ms = 1000.0 * IGPlus_TI_TickLen;
+	for (i = 0; i < arraycount(GameReplicationInfo.PRIArray); ++i) {
+		PRI = GameReplicationInfo.PRIArray[i];
+		if (PRI == None)
+			break;
+		P = bbPlayer(PRI.Owner);
+		if (P == None || P == self || P.Role != ROLE_SimulatedProxy)
+			continue;
+		if (bWrite && P.IGPlus_TI_StFrames > 0) {
+			F = float(P.IGPlus_TI_StFrames);
+			ClientDebugMessage("Tick Interpolation:"@"player="$PRI.PlayerName
+				@"secs="$IGPlus_Fmt1((Level.TimeSeconds - IGPlus_TI_StSince) / Level.TimeDilation)
+				@"frames="$P.IGPlus_TI_StFrames@"updates="$P.IGPlus_TI_StUpdates
+				@"past="$IGPlus_Fmt1(100.0 * float(P.IGPlus_TI_StPast) / F)$"%"
+				@"stopped="$IGPlus_Fmt1(100.0 * float(P.IGPlus_TI_StStopped) / F)$"%"
+				@"held="$IGPlus_Fmt1(100.0 * float(P.IGPlus_TI_StHeld) / F)$"%"
+				@"delayMsAvg="$IGPlus_Fmt1(Ms * P.IGPlus_TI_StDelaySum / F)
+				@"delayMsMax="$IGPlus_Fmt1(Ms * P.IGPlus_TI_StDelayMax)
+				@"gapTicksMax="$IGPlus_Fmt1(P.IGPlus_TI_StGapMax)
+				@"back1="$P.IGPlus_TI_StBack1@"back3="$P.IGPlus_TI_StBack3
+				@"backMax="$IGPlus_Fmt1(P.IGPlus_TI_StBackMax)
+				@"resets="$P.IGPlus_TI_StResets@"clockSnaps="$IGPlus_TI_StClockSnaps
+				@"tickMs="$IGPlus_Fmt1(Ms));
+		}
+		P.IGPlus_TI_StFrames = 0;
+		P.IGPlus_TI_StPast = 0;
+		P.IGPlus_TI_StStopped = 0;
+		P.IGPlus_TI_StHeld = 0;
+		P.IGPlus_TI_StUpdates = 0;
+		P.IGPlus_TI_StResets = 0;
+		P.IGPlus_TI_StBack1 = 0;
+		P.IGPlus_TI_StBack3 = 0;
+		P.IGPlus_TI_StDelaySum = 0.0;
+		P.IGPlus_TI_StDelayMax = 0.0;
+		P.IGPlus_TI_StGapMax = 0.0;
+		P.IGPlus_TI_StBackMax = 0.0;
+	}
+	IGPlus_TI_StClockSnaps = 0;
 }
 
 // Client, on another player's pawn (Tick Interpolation). Between frames the
@@ -15047,8 +15174,10 @@ simulated function IGPlus_TI_After(float DeltaTime) {
 			Prev = IGPlus_TI_Tick[(IGPlus_TI_Head - 1) & 15];
 			Delta = Full - Prev;
 			// A stamp from far off (they were out of sight): start again.
-			if (Delta <= 0 || Delta > 60)
+			if (Delta <= 0 || Delta > 60) {
 				IGPlus_TI_Num = 0;
+				IGPlus_TI_StResets++;
+			}
 			else if (float(Delta) > IGPlus_TI_Gap)
 				IGPlus_TI_Gap = float(Delta);
 			else
@@ -15067,6 +15196,7 @@ simulated function IGPlus_TI_After(float DeltaTime) {
 			IGPlus_TI_Num++;
 		IGPlus_TI_bHasByte = true;
 		IGPlus_TI_LastByte = IGPlus_NetTick;
+		IGPlus_TI_StUpdates++;
 		// Drawn far enough back that the next update is in before it is needed.
 		Target = FClamp(IGPlus_TI_Gap + IGPLUS_TI_EXTRA, IGPLUS_TI_MIN_DELAY, IGPLUS_TI_MAX_DELAY);
 		IGPlus_TI_Delay += FClamp(Target - IGPlus_TI_Delay, -0.02, 0.05);
@@ -15086,6 +15216,8 @@ simulated function IGPlus_TI_After(float DeltaTime) {
 	SetLocation(IGPlus_TI_Sample(IGPlus_TI_DrawnR, TickLen, IGPlus_TI_bDrawnHeld));
 	bCollideWorld = true;
 	IGPlus_TI_AnimAfter(IGPlus_TI_Delay * TickLen);
+	if (LP.bDrawDebugData)
+		IGPlus_TI_Stat();
 
 	IGPlus_LocationOffsetFix_Moved = false;
 	if (IGPlus_LocationOffsetFix_FootstepQueued) {

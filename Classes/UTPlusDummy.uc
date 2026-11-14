@@ -306,7 +306,11 @@ function CompStartTick(float R, float TickLen, optional bool bPast, optional boo
 			CompSwap(B, None, 0.0, 0.0);
 	} else if (bPast == false && B != None && B.Tick > A.Tick) {
 		CompTickB = B.Tick;
-		CompSwap(A, B, (R - float(A.Tick)) / float(B.Tick - A.Tick), 0.0);
+		// Not between the two ends of a teleport: at the older one, as the client draws it.
+		if (class'bbPlayer'.static.IGPlus_TI_IsJump(A.Loc, B.Loc, B.Tick - A.Tick, TickLen))
+			CompSwap(A, None, 0.0, 0.0);
+		else
+			CompSwap(A, B, (R - float(A.Tick)) / float(B.Tick - A.Tick), 0.0);
 	} else {
 		CompSwap(A, None, -1.0, A.ServerTimeStamp
 			+ class'bbPlayer'.static.IGPlus_TI_CarryTicks(R - float(A.Tick), bHeld && bHoldAfter) * TickLen);
