@@ -63,12 +63,12 @@ function float IGPlus_GetLatencyMs(Pawn Instigator, optional bool bOneWay) {
 	if (PingMs <= 0.0 && Instigator.PlayerReplicationInfo != None && Instigator.PlayerReplicationInfo.Ping > 0)
 		PingMs = float(Instigator.PlayerReplicationInfo.Ping);
 
-	// One way: half the ping holds half the Jitter Compensation delay (the
+	// One way: half the ping holds half the Adaptive Buffering delay (the
 	// client's ping runs to the acknowledgement, sent when the move runs).
 	// The whole delay lies on the way here, so add the other half.
 	if (bOneWay) {
 		if (bbP != None)
-			PingMs += float(bbP.IGPlus_JCDelayMs);
+			PingMs += float(bbP.IGPlus_ABDelayMs);
 		return FMax(0.0, 0.5 * PingMs);
 	}
 	return FMax(0.0, PingMs);
@@ -105,11 +105,11 @@ function float IGPlus_GetAveragePingRewindMs(Pawn Instigator) {
 	InterpMs = IGPlus_GetSnapshotInterpRewindMs(Instigator);
 	BasePingMs = IGPlus_GetLatencyMs(Instigator, false);
 	if (InterpMs > 0.0) {
-		// (One way: plus the other half of the Jitter Compensation delay.)
+		// (One way: plus the other half of the Adaptive Buffering delay.)
 		if (bbP.PingAverage > 0)
-			EffectivePing = (0.5 * float(bbP.PingAverage + bbP.IGPlus_JCDelayMs)) + InterpMs;
+			EffectivePing = (0.5 * float(bbP.PingAverage + bbP.IGPlus_ABDelayMs)) + InterpMs;
 		else
-			EffectivePing = (0.5 * (BasePingMs + float(bbP.IGPlus_JCDelayMs))) + InterpMs;
+			EffectivePing = (0.5 * (BasePingMs + float(bbP.IGPlus_ABDelayMs))) + InterpMs;
 	} else
 		EffectivePing = BasePingMs;
 
@@ -556,10 +556,7 @@ final simulated function float GetPawnDuckFraction(Pawn P) {
 	local bbPlayer bbP;
 	bbP = bbPlayer(P);
 	if (bbP != none) {
-		if (Role < ROLE_Authority)
-			return FClamp(bbP.DuckFractionRepl/255.0, 0.0, 1.0);
-		else
-			return FClamp(bbP.DuckFraction, 0.0, 1.0);
+		return FClamp(bbP.IGPlus_HitDuckFraction(), 0.0, 1.0);
 	} else {
 		return CalcDuckFraction(P.EyeHeight, P.default.BaseEyeHeight);
 	}
@@ -1230,9 +1227,9 @@ function float SimulateProjectile(Projectile P, int Ping, optional float CatchUp
     SimPing = CatchUpMs;
   } else {
     InterpMs = IGPlus_GetSnapshotInterpRewindMs(P.Instigator);
-    // The shot's move ran one way plus the Jitter Compensation delay after it
+    // The shot's move ran one way plus the Adaptive Buffering delay after it
     // was made. Half the ping holds half that delay: add the other half.
-    SimPing = (Ping + bbPlayer(P.Instigator).IGPlus_JCDelayMs) * 0.5 + InterpMs;
+    SimPing = (Ping + bbPlayer(P.Instigator).IGPlus_ABDelayMs) * 0.5 + InterpMs;
   }
 
   // Cap ping compensation
@@ -1288,9 +1285,9 @@ function BatchSimulateProjectiles(Projectile Projectiles[6], int NumProjectiles,
   PureRef = bbPlayer(Projectiles[0].Instigator).zzUTPure;
 
   InterpMs = IGPlus_GetSnapshotInterpRewindMs(Projectiles[0].Instigator);
-  // Simulate only 1-way latency, with the other half of the Jitter
-  // Compensation delay (see SimulateProjectile).
-  SimPing = (Ping + bbPlayer(Projectiles[0].Instigator).IGPlus_JCDelayMs) * 0.5 + InterpMs;
+  // Simulate only 1-way latency, with the other half of the Adaptive
+  // Buffering delay (see SimulateProjectile).
+  SimPing = (Ping + bbPlayer(Projectiles[0].Instigator).IGPlus_ABDelayMs) * 0.5 + InterpMs;
   
   if (SimPing > WeaponSettings.PingCompensationMax)
     SimPing = WeaponSettings.PingCompensationMax;

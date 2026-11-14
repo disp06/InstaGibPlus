@@ -15,6 +15,11 @@ var bool bCompActive;
 // The last rewind by the shown tick: how old the snapshot was at the time
 // the shooter saw, and for how long it was carried on (for the [DET-HIT] line).
 var float CompGap, CompCarry;
+// The last rewind by a tick position: the ticks of the two snapshots used (the second is 0 for a carry).
+var int CompTickA, CompTickB;
+// A rewind by a tick position: a client with Tick Interpolation knows no
+// holds, it draws between the updates it got. So the held mark is left out.
+var bool bCompIgnoreHold;
 
 var bool ActualWasColliding;
 var bool ActualWasBlockingActors;
@@ -74,7 +79,10 @@ function FillData(UTPlusSnapshot D) {
 	D.bSnapBlockPlayers = Actual.bBlockPlayers;
 	D.bSnapProjTarget = Actual.bProjTarget;
 	D.ServerTimeStamp = Level.TimeSeconds;
-	D.bHeld = bbPlayer(Actual) != None && bbPlayer(Actual).IGPlus_JCHeld;
+	D.bHeld = bbPlayer(Actual) != None && bbPlayer(Actual).IGPlus_ABHeld;
+	D.bNoMove = false;
+	if (bbPlayer(Actual) != None && bbPlayer(Actual).zzUTPure != None)
+		D.Tick = bbPlayer(Actual).zzUTPure.IGPlus_GlobalTick;
 
 	D.AnimSequence = Actual.AnimSequence;
 	D.AnimFrame = Actual.AnimFrame;
@@ -88,7 +96,7 @@ function FillData(UTPlusSnapshot D) {
 event Tick(float DeltaTime) {
     local int i;
     local PlayerPawn PP;
-    local bool bNowHeld;
+    local bool bNowHeld, bNoMoveSnap;
     super.Tick(DeltaTime);
 
     if (Actual == none || Actual.bDeleteMe) {
@@ -125,15 +133,17 @@ event Tick(float DeltaTime) {
 			bHistoryCleared = false;
 		}
 
-		// A snapshot for every tick a move ran in, and one for the tick Jitter
-		// Compensation starts to hold the player still (no move runs then).
-		bNowHeld = bbPlayer(PP) != None && bbPlayer(PP).IGPlus_JCHeld;
+		// A snapshot for every tick a move ran in, and one for the tick Adaptive
+		// Buffering starts to hold the player still (no move runs then).
+		bNowHeld = bbPlayer(PP) != None && bbPlayer(PP).IGPlus_ABHeld;
 		if (PP.CurrentTimeStamp > LatestClientTimeStamp || bNowHeld != bLastHeld) {
 			bLastHeld = bNowHeld;
+			bNoMoveSnap = PP.CurrentTimeStamp <= LatestClientTimeStamp;
 			LatestClientTimeStamp = PP.CurrentTimeStamp;
 			if (Data[DataIndex] == None)
 				Data[DataIndex] = new class'UTPlusSnapshot';
 			FillData(Data[DataIndex]);
+			Data[DataIndex].bNoMove = bNoMoveSnap;
 			DataIndex = (DataIndex + 1) % arraycount(Data);
 		}
 	} else { // Handle non-PlayerPawn Actual
@@ -249,6 +259,61 @@ function CompStartSeen(float SeenTime, float ViewTime) {
 		CompSwap(Oldest, None, -1.0, ViewTime);
 }
 
+// Tick Interpolation: stand the player where a client drew them at tick
+// position R (a tick number and a part of the way to the next snapshot). The
+// client draws between the two updates around R, and the updates it got are
+// our snapshots of the ticks a move ran in. Past the newest snapshot the
+// client carries the player on for at most 2 ticks, and so do we. bPast: the
+// client had no update after R when it drew, so a snapshot we took later is
+// left out. bHeld: the client drew them standing still there, because we had
+// told it that we hold them (Adaptive Buffering). That is only taken when a
+// hold of ours did follow that snapshot.
+function CompStartTick(float R, float TickLen, optional bool bPast, optional bool bHeld) {
+	local int Idx, Scans;
+	local UTPlusSnapshot Snap, A, B;
+	local bool bHoldAfter;
+
+	if (Actual == none || Actual.bDeleteMe || Actual.Health <= 0)
+		return;
+
+	Idx = DataIndex;
+	for (Scans = 0; Scans < arraycount(Data); Scans++) {
+		Idx = (Idx - 1 + arraycount(Data)) % arraycount(Data);
+		Snap = Data[Idx];
+		if (Snap == None || Snap.ServerTimeStamp <= 0)
+			continue;
+		if (Snap.bNoMove) {
+			// A snapshot with no move: a hold started or ended. Going back in
+			// time, the last one seen before A tells what followed A.
+			bHoldAfter = Snap.bHeld;
+			continue;
+		}
+		if (float(Snap.Tick) <= R) {
+			A = Snap;
+			break;
+		}
+		B = Snap;
+		bHoldAfter = false;
+	}
+	CompTickA = 0;
+	CompTickB = 0;
+	if (A != None)
+		CompTickA = A.Tick;
+	bCompIgnoreHold = true;
+	if (A == None) {
+		// Older than everything we kept: the oldest snapshot.
+		if (B != None)
+			CompSwap(B, None, 0.0, 0.0);
+	} else if (bPast == false && B != None && B.Tick > A.Tick) {
+		CompTickB = B.Tick;
+		CompSwap(A, B, (R - float(A.Tick)) / float(B.Tick - A.Tick), 0.0);
+	} else {
+		CompSwap(A, None, -1.0, A.ServerTimeStamp
+			+ class'bbPlayer'.static.IGPlus_TI_CarryTicks(R - float(A.Tick), bHeld && bHoldAfter) * TickLen);
+	}
+	bCompIgnoreHold = false;
+}
+
 function TakeDamage(
     int Damage,
     Pawn InstigatedBy,
@@ -275,8 +340,8 @@ function CompSwap(UTPlusSnapshot SnapA, UTPlusSnapshot SnapB, float Alpha, float
 		return;
 
 	// Compute position/velocity based on compensation mode
-	if (SnapA.bHeld) {
-		// Held still by Jitter Compensation from this snapshot until the next
+	if (SnapA.bHeld && bCompIgnoreHold == false) {
+		// Held still by Adaptive Buffering from this snapshot until the next
 		// one. The other clients drew the player standing here
 		// (bbPlayer.IGPlus_ApplyWarpFix), so nothing carries them on.
 		CompGap = TargetTimeStamp - SnapA.ServerTimeStamp;

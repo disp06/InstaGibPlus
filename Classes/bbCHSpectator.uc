@@ -1118,8 +1118,10 @@ function IGPlus_ServerRequestSettings() {
 	IGPlus_ServerSendSetting("SnapshotInterpSendHz");
 	IGPlus_ServerSendSetting("SnapshotInterpRewindMs");
 	IGPlus_ServerSendSetting("bEnableWarpFix");
-	IGPlus_ServerSendSetting("bEnableJitterCompensation");
-	IGPlus_ServerSendSetting("JitterCompensationMax");
+	IGPlus_ServerSendSetting("bEnableAdaptiveBuffering");
+	IGPlus_ServerSendSetting("bEnableTickInterpolation");
+	IGPlus_ServerSendSetting("bEnableFireTimeOrder");
+	IGPlus_ServerSendSetting("AdaptiveBufferingMax");
 
 	IGPlus_ServerSendSetting("MinClientRate");
 	IGPlus_ServerSendSetting("MaxClientRate");

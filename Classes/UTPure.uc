@@ -41,6 +41,18 @@ var IGPlus_WeaponImplementation WImp;
 var bool bWImpSearched;
 
 var bool bCompensationIsActive;
+// Fire order inside one tick: the players whose rifle or sniper shot waits
+// for the end of this tick's packets (bbPlayer.IGPlus_QueueShot).
+var bbPlayer IGPlus_ShotQueue[32];
+var int IGPlus_ShotQueueNum;
+var bool IGPlus_bShotFlush;
+// The engine tells us when a tick's packets are read (bbPlayer.CheckClientError,
+// 469 servers). Without that, shots are traced as they arrive.
+var bool IGPlus_bShotOrderReady;
+// Tick Interpolation: every server tick has a number. A player's snapshots
+// and the updates sent to the clients carry it.
+var int IGPlus_GlobalTick;
+const IGPLUS_FIRE_ORDER_MARGIN = 0.002; // shots fired closer together than this keep the order they arrived in
 
 var ST_ProjectileDummy ProjDummies;
 // The engine spawns a DemoRecSpectator for every server demo and never
@@ -452,12 +464,74 @@ function xxReplaceTeamInfo()
 }
 
 // TICK!!! And it's not the bug kind. Sorta :/
+function bool IGPlus_QueueShooter(bbPlayer P) {
+	if (IGPlus_bShotFlush || IGPlus_ShotQueueNum >= arraycount(IGPlus_ShotQueue))
+		return false;
+	IGPlus_ShotQueue[IGPlus_ShotQueueNum++] = P;
+	return true;
+}
+
+// Run the shots that waited, the one fired first first. Two shots that
+// arrive in the same tick used to run in the order their packets were read,
+// so the later click could win. A shooter killed by an earlier shot of the
+// batch loses his own (bbPlayer.IGPlus_RunPendingShot).
+function IGPlus_FlushShots() {
+	local int i, j, Num;
+	local bbPlayer P;
+	local int Arrived[32];
+	local int k;
+
+	if (IGPlus_ShotQueueNum == 0 || IGPlus_bShotFlush)
+		return;
+	IGPlus_bShotFlush = true;
+	Num = IGPlus_ShotQueueNum;
+	if (Num > 1) {
+		for (i = 0; i < Num; i++)
+			Arrived[i] = i;
+		// Insertion sort: a shot moves ahead of the one before it only when
+		// it was fired earlier by more than the margin.
+		for (i = 1; i < Num; i++) {
+			j = i;
+			while (j > 0 && IGPlus_ShotQueue[j] != None && IGPlus_ShotQueue[j - 1] != None
+				&& class'bbPlayer'.static.IGPlus_ShotRunsFirst(IGPlus_ShotQueue[j].IGPlus_PendShotAgo,
+					IGPlus_ShotQueue[j - 1].IGPlus_PendShotAgo, IGPLUS_FIRE_ORDER_MARGIN * Level.TimeDilation)) {
+				P = IGPlus_ShotQueue[j];
+				IGPlus_ShotQueue[j] = IGPlus_ShotQueue[j - 1];
+				IGPlus_ShotQueue[j - 1] = P;
+				k = Arrived[j];
+				Arrived[j] = Arrived[j - 1];
+				Arrived[j - 1] = k;
+				j--;
+			}
+		}
+		for (i = 0; i < Num; i++) {
+			if (IGPlus_ShotQueue[i] == None)
+				continue;
+			IGPlus_ShotQueue[i].IGPlus_StatFireShared++;
+			if (Arrived[i] != i)
+				IGPlus_ShotQueue[i].IGPlus_StatFireMoved++;
+		}
+	}
+	for (i = 0; i < Num; i++) {
+		P = IGPlus_ShotQueue[i];
+		IGPlus_ShotQueue[i] = None;
+		if (P != None && P.bDeleteMe == false)
+			P.IGPlus_RunPendingShot();
+	}
+	IGPlus_ShotQueueNum = 0;
+	IGPlus_bShotFlush = false;
+}
+
 event Tick(float zzDelta)
 {
 	local bool zzbDoShot;
 	local Pawn zzP;
 	local bbPlayer zzbP;
 	local bbCHSpectator zzbS;
+
+	// No shot waits past the tick it arrived in.
+	IGPlus_FlushShots();
+	IGPlus_GlobalTick++;
 
 	if (Level.Pauser != "")		// This code is to avoid players being kicked when paused.
 	{
@@ -687,7 +761,12 @@ function CompensateFor(int Ping, optional Pawn Instigator, optional bool bHitsca
 				Moved = 0;
 			D.CompEnd();
 		}
-		D.CompStartSeen(PRT.IGPlus_PRTSeenTime, PRT.IGPlus_PRTViewTimeNow());
+		// Tick Interpolation: between the two snapshots the shooter's screen
+		// drew the shot's target between.
+		if (PRT.IGPlus_bPRTInterp)
+			D.CompStartTick(PRT.IGPlus_PRTInterpR, FMax(PRT.AverageServerDeltaTime, 0.001), PRT.IGPlus_bPRTInterpPast, PRT.IGPlus_bPRTInterpHeld);
+		else
+			D.CompStartSeen(PRT.IGPlus_PRTSeenTime, PRT.IGPlus_PRTViewTimeNow());
 		if (PRTDebug != none && Moved == 0 && D.bCompActive) {
 			Moved = VSize(D.Location - OldLoc);
 			if (Moved > MostMoved) {
@@ -1331,8 +1410,10 @@ function string IGPlus_NormalizeServerSettingKey(string Key) {
 	if (Key ~= "SnapshotInterpSendHz") return "SnapshotInterpSendHz";
 	if (Key ~= "SnapshotInterpRewindMs") return "SnapshotInterpRewindMs";
 	if (Key ~= "bEnableWarpFix") return "bEnableWarpFix";
-	if (Key ~= "bEnableJitterCompensation") return "bEnableJitterCompensation";
-	if (Key ~= "JitterCompensationMax") return "JitterCompensationMax";
+	if (Key ~= "bEnableAdaptiveBuffering") return "bEnableAdaptiveBuffering";
+	if (Key ~= "AdaptiveBufferingMax") return "AdaptiveBufferingMax";
+	if (Key ~= "bEnableTickInterpolation") return "bEnableTickInterpolation";
+	if (Key ~= "bEnableFireTimeOrder") return "bEnableFireTimeOrder";
 	if (Key ~= "MinClientRate") return "MinClientRate";
 	if (Key ~= "MaxClientRate") return "MaxClientRate";
 	if (Key ~= "ShowTouchedPackage") return "ShowTouchedPackage";
@@ -1384,6 +1465,7 @@ function IGPlus_ApplyServerSettingsToPlayers() {
 				BP.IGPlus_SnapInterp_ServerNextTime = 0;
 				BP.IGPlus_SnapInterp_ServerHasLast = false;
 			}
+			BP.IGPlus_EnableTickInterp = Settings.TickInterpolationActive();
 			BP.ShowDamageNumberMode = IGPlus_DamageNumberMode();
 			continue;
 		}

@@ -185,7 +185,8 @@ function TestPreciseRewindTimeReport() {
 		"PRT_report_tick_survives_wrap");
 	LogTestResult(class'bbPlayer'.static.IGPlus_PRTTicksBack(10, class'bbPlayer'.static.IGPlus_PRTPack(12, 0)) >= 64,
 		"PRT_report_from_the_future_is_too_old");
-	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTAge(class'bbPlayer'.static.IGPlus_PRTPack(5, 9.0)) - 6.5535) < 0.0001,
+	// (15 bits of 0.1 ms: the top bit of the report marks a tick position.)
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_PRTAge(class'bbPlayer'.static.IGPlus_PRTPack(5, 9.0)) - 3.2767) < 0.0001,
 		"PRT_report_long_age_clamps_and_stays_positive");
 	LogTestResult((class'bbPlayer'.static.IGPlus_PRTPack(0, 0) & 0x8000) != 0,
 		"PRT_report_is_always_marked");
@@ -224,6 +225,60 @@ function TestShotEyePacking() {
 	P = class'bbPlayer'.static.IGPlus_PackDeltaEye(5.0, 0);
 	LogTestResult(class'bbPlayer'.static.IGPlus_UnpackDelta(P) < 1.0 && class'bbPlayer'.static.IGPlus_UnpackDelta(P) > 0.999 && (P >>> 24) == 0,
 		"MoveDelta_clamps_under_a_second_and_leaves_the_eye_alone");
+}
+
+// Fire order inside one tick (bbPlayer.IGPlus_ShotRunsFirst): the values are
+// how long before now each shot was fired.
+function TestFireOrder() {
+	// Fired 10 ms earlier than the shot that arrived first: runs first.
+	LogTestResult(class'bbPlayer'.static.IGPlus_ShotRunsFirst(0.040, 0.030, 0.002),
+		"FireOrder_the_earlier_click_runs_first");
+	// Fired later than the shot that arrived first: stays behind it.
+	LogTestResult(class'bbPlayer'.static.IGPlus_ShotRunsFirst(0.020, 0.030, 0.002) == false,
+		"FireOrder_the_later_click_stays_behind");
+	// 1 ms apart is inside the margin: the order they arrived in stays.
+	LogTestResult(class'bbPlayer'.static.IGPlus_ShotRunsFirst(0.031, 0.030, 0.002) == false,
+		"FireOrder_inside_the_margin_keeps_arrival_order");
+	LogTestResult(class'bbPlayer'.static.IGPlus_ShotRunsFirst(0.030, 0.030, 0.002) == false,
+		"FireOrder_a_tie_keeps_arrival_order");
+}
+
+// Tick Interpolation: the tick position a shot reports, and the tick number
+// of an update from its low 8 bits.
+function TestTickInterp() {
+	local int P;
+
+	P = class'bbPlayer'.static.IGPlus_TI_Pack(70000.5);
+	LogTestResult(P < 0 && Abs(class'bbPlayer'.static.IGPlus_TI_Unpack(P, 70003) - 70000.5) < 0.005,
+		"TickInterp_report_round_trip_with_the_mark_bit");
+	// The server's tick number has gone past a 15 bit wrap since the report.
+	P = class'bbPlayer'.static.IGPlus_TI_Pack(32766.25);
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_TI_Unpack(P, 32770) - 32766.25) < 0.005,
+		"TickInterp_report_across_the_15_bit_wrap");
+	P = class'bbPlayer'.static.IGPlus_TI_Pack(500.75, true);
+	LogTestResult((P & (1 << 24)) != 0 && Abs(class'bbPlayer'.static.IGPlus_TI_Unpack(P, 501) - 500.75) < 0.005,
+		"TickInterp_report_keeps_its_place_with_the_past_mark");
+	LogTestResult(class'bbPlayer'.static.IGPlus_PRTPack(100, 9.0) > 0,
+		"TickInterp_an_age_report_never_carries_the_mark_bit");
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_FullTick(250, 1020) == 1018,
+		"TickInterp_stamp_two_ticks_back");
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_FullTick(2, 1023) == 1026,
+		"TickInterp_stamp_ahead_of_our_own_number");
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_FullTick(255, 1023) == 1023,
+		"TickInterp_stamp_of_this_tick");
+	P = class'bbPlayer'.static.IGPlus_TI_Pack(500.75, true, true);
+	LogTestResult((P & (1 << 25)) != 0 && (P & (1 << 24)) != 0 && Abs(class'bbPlayer'.static.IGPlus_TI_Unpack(P, 501) - 500.75) < 0.005,
+		"TickInterp_report_keeps_its_place_with_the_held_mark");
+	// Held only counts for a player drawn past their newest update.
+	P = class'bbPlayer'.static.IGPlus_TI_Pack(500.75, false, true);
+	LogTestResult((P & (1 << 25)) == 0,
+		"TickInterp_no_held_mark_without_the_past_mark");
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_CarryTicks(1.25, false) == 1.25,
+		"TickInterp_carried_on_past_the_newest_update");
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_CarryTicks(7.0, false) == 2.0,
+		"TickInterp_carry_stops_after_two_ticks");
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_CarryTicks(1.25, true) == 0.0,
+		"TickInterp_a_held_player_is_not_carried_on");
 }
 
 // Where the client's own trace stands another player (bbPlayer.IGPlus_PRTRulePos).
@@ -265,5 +320,7 @@ event int main(string Params) {
 	TestTradeReach();
 	TestShotEyePacking();
 	TestPRTRulePos();
+	TestFireOrder();
+	TestTickInterp();
 	return 0;
 }

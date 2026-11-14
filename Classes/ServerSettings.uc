@@ -76,8 +76,10 @@ var config bool  bEnableSnapshotInterpolation;
 var config float SnapshotInterpSendHz;
 var config float SnapshotInterpRewindMs;
 var config bool  bEnableWarpFix;
-var config bool  bEnableJitterCompensation;
-var config int   JitterCompensationMax; // ms
+var config bool  bEnableAdaptiveBuffering;
+var config bool  bEnableTickInterpolation;
+var config bool  bEnableFireTimeOrder;
+var config int   AdaptiveBufferingMax; // ms
 var config bool  bEnableCarcassCollision;
 var config bool  ShowTouchedPackage;
 var config bool  bEnableHitboxDebugMode;
@@ -139,9 +141,14 @@ function bool DeterministicTranslocatorActive() {
 	return bEnableDeterministicTranslocator && !bEnableInputReplication;
 }
 
-// Jitter Compensation is built on the ServerMove path.
-function bool JitterCompensationActive() {
-	return bEnableJitterCompensation && !bEnableInputReplication;
+// Tick Interpolation uses the ServerMove path and has its own drawing.
+function bool TickInterpolationActive() {
+	return bEnableTickInterpolation && !bEnableSnapshotInterpolation && !bEnableInputReplication;
+}
+
+// Adaptive Buffering is built on the ServerMove path.
+function bool AdaptiveBufferingActive() {
+	return bEnableAdaptiveBuffering && !bEnableInputReplication;
 }
 
 function DumpSetting(PlayerPawn P, string S) {
@@ -204,8 +211,10 @@ function DumpServerSettings(PlayerPawn P) {
 	DumpSetting(P, "SnapshotInterpSendHz");
 	DumpSetting(P, "SnapshotInterpRewindMs");
 	DumpSetting(P, "bEnableWarpFix");
-	DumpSetting(P, "bEnableJitterCompensation");
-	DumpSetting(P, "JitterCompensationMax");
+	DumpSetting(P, "bEnableAdaptiveBuffering");
+	DumpSetting(P, "bEnableTickInterpolation");
+	DumpSetting(P, "bEnableFireTimeOrder");
+	DumpSetting(P, "AdaptiveBufferingMax");
 	DumpSetting(P, "MinClientRate");
 	DumpSetting(P, "MaxClientRate");
 	DumpSetting(P, "ShowTouchedPackage");
@@ -278,8 +287,10 @@ defaultproperties
 	SnapshotInterpSendHz=30.0
 	SnapshotInterpRewindMs=66.0
 	bEnableWarpFix=True
-	bEnableJitterCompensation=False
-	JitterCompensationMax=100
+	bEnableAdaptiveBuffering=False
+	bEnableTickInterpolation=False
+	bEnableFireTimeOrder=True
+	AdaptiveBufferingMax=100
 	bEnableCarcassCollision=True
 	HitFeedbackMode=HFM_Always
 	ShowDamageNumberMode=DMG_Disabled

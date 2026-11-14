@@ -157,7 +157,10 @@ function HandleDetServerFire(rotator StepView, vector StepLoc) {
 	if (!bChangeWeapon && !IsInState('DownWeapon'))
 		PlayAnim('Fire1', 0.20 + 0.20 * FireAdjust, 0.05);
 
-	DeterministicTraceFire(StepView, StepLoc);
+	// Traced once the tick's packets are all read, in the order the shots
+	// were fired (bbPlayer.IGPlus_QueueShot). Now, where that can't be done.
+	if (bbPlayer(PawnOwner) == None || bbPlayer(PawnOwner).IGPlus_QueueShot(self, StepView, StepLoc) == false)
+		DeterministicTraceFire(StepView, StepLoc);
 }
 
 function PostBeginPlay()

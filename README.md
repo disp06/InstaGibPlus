@@ -1398,8 +1398,10 @@ Server settings can be found inside InstaGibPlus.ini.
 1. [SnapshotInterpRewindMs](#snapshotinterprewindms)
 1. [bEnableWarpFix](#benablewarpfix)
 1. [WarpFixDelay](#warpfixdelay)
-1. [bEnableJitterCompensation](#benablejittercompensation)
-1. [JitterCompensationMax](#jittercompensationmax)
+1. [bEnableAdaptiveBuffering](#benableadaptivebuffering)
+1. [AdaptiveBufferingMax](#adaptivebufferingmax)
+1. [bEnableTickInterpolation](#benabletickinterpolation)
+1. [bEnableFireTimeOrder](#benablefiretimeorder)
 1. [FireTimeout](#firetimeout)
 1. [DetFireClockMargin](#detfireclockmargin)
 1. [bEnablePredictedSwitching](#benablepredictedswitching)
@@ -1830,7 +1832,7 @@ Selects which players get updates over more than [MaxJitterTime](#maxjittertime)
 
 All modes share [MaxJitterTime](#maxjittertime).
 
-Jitter bounding does not run while [bEnableJitterCompensation](#benablejittercompensation) is on.
+Jitter bounding does not run while [bEnableAdaptiveBuffering](#benableadaptivebuffering) is on.
 
 ## bEnableSnapshotInterpolation
 
@@ -1872,7 +1874,7 @@ If enabled, other players will not be extrapolated indefinitely on clients. Inst
 
 The amount of time that has to pass without an update from a player before forcing them back to their position on the server for all other clients. Also controls 
 
-## bEnableJitterCompensation
+## bEnableAdaptiveBuffering
 
 **Type: bool**  
 **Default: False**  
@@ -1883,21 +1885,56 @@ Without it the server runs every move the moment its packet arrives. When packet
 
 If set to `True`, the server keeps the moves of such a player in a short queue. It plays them at the pace the player made them. Other players then see an even path. When the queue runs empty the player stands still until the next move arrives, and carries on from that spot. The server never guesses the missing input, so the queue gives that player no corrections.
 
-The player with the bad connection pays with delay. Their moves, shots and hit sounds come later by the time their moves wait, up to [JitterCompensationMax](#jittercompensationmax). Their ping on the scoreboard includes that delay. The delay shrinks again once their packets arrive on time.
+The player with the bad connection pays with delay. Their moves, shots and hit sounds come later by the time their moves wait, up to [AdaptiveBufferingMax](#adaptivebufferingmax). Their ping on the scoreboard includes that delay. The delay shrinks again once their packets arrive on time.
 
 A player whose packets arrive on time is not queued. The server runs their moves on arrival, as with the setting off.
 
-Jitter Compensation replaces jitter bounding. [JitterBoundingMode](#jitterboundingmode) does not run while this is on. Requires bEnableInputReplication to be False. Needs a server on version 469.
+Adaptive Buffering replaces jitter bounding. [JitterBoundingMode](#jitterboundingmode) does not run while this is on. Requires bEnableInputReplication to be False. Needs a server on version 469.
 
-The server log gets a `[JITTER]` line when a player enters or leaves the queue. It also gets a `[JITTER-SUMMARY]` line for each player at the end of a map. That line says how late the player's moves arrived, and how many of them were later than the slack that queues a player (`slackMs`, `overSlack`, and `overSlackEvents` for the times such a move came with none in the 3 seconds before it). It is written with the setting on or off.
+The server log gets a `[BUFFER]` line when a player enters or leaves the queue. It also gets a `[JITTER-SUMMARY]` line for each player at the end of a map. That line says how late the player's moves arrived, and how many of them were later than the slack that queues a player (`slackMs`, `overSlack`, and `overSlackEvents` for the times such a move came with none in the 3 seconds before it). It is written with the setting on or off.
 
-## JitterCompensationMax
+## AdaptiveBufferingMax
 
 **Type: int**  
 **Default: 100**  
 **Unit: ms**  
 
-The most delay [bEnableJitterCompensation](#benablejittercompensation) gives one player. Movement that arrives later than this runs at once, as with the setting off.
+The most delay [bEnableAdaptiveBuffering](#benableadaptivebuffering) gives one player. Movement that arrives later than this runs at once, as with the setting off.
+
+## bEnableTickInterpolation
+
+**Type: bool**  
+**Default: False**  
+
+If enabled, a client draws every other player between two real updates from the server, a little in the past, instead of moving them forward by a guess. A rifle or sniper shot then tells the server the exact tick position its target was drawn at, and the server stands the players between the same two snapshots. What the shooter's screen showed is the spot the server tests, at any frame rate and any ping.
+
+How it works:
+
+* The server numbers its ticks. With each player it sends the number of the tick that player's last move ran in, and where the player stood at the end of that tick. That costs about 10 bytes for each other player in each tick.
+* The client keeps each player's last 16 updates. It draws a player behind the server's tick clock by the gap between that player's updates plus one tick, 2 ticks at least and 10 at most.
+* Past a player's newest update the client carries them on by their velocity for at most 2 ticks. Then they stand still until the next update arrives. The shot tells the server when that was the case.
+* A player the server holds still is not carried on at all. That is a player whose queue ran empty with [bEnableAdaptiveBuffering](#benableadaptivebuffering) on. The server says so, and the shot tells the server that the player was drawn standing.
+* The animation is drawn from the same moment as the body. The client notes the animation the engine plays in every frame and shows the one from as long ago as the body is drawn behind.
+* A hit test takes the crouch that came with the update the body is drawn from, as the server takes it from its snapshot of that tick.
+* While a player's body stands still because their updates stopped, their animation stands still too and they make no footstep sounds.
+* The client's own trace for the instant hit sound tests the players where the last frame drew them.
+
+A client's Location Offset Fix setting has no effect while this is on. The picture is later than without it, by the delay above. A player whose packets stall is drawn standing still for a moment and then catches up. [bEnableAdaptiveBuffering](#benableadaptivebuffering) evens that out on the server.
+
+Needs [bEnablePingCompensation](#benablepingcompensation) and [bEnablePreciseRewindTime](#benablepreciserewindtime). Not used with [bEnableSnapshotInterpolation](#benablesnapshotinterpolation) or bEnableInputReplication. Players on lifts are drawn the same way, with no lift handling of their own yet.
+
+## bEnableFireTimeOrder
+
+**Type: bool**  
+**Default: True**  
+
+Fire Time Order, for the rifle of NextIG and the sniper of NextSA.
+
+Without it the server runs a shot the moment it reads the shot's packet. Two shots that reach the server in the same tick then run in the order their packets arrived, and the later click can win.
+
+If set to `True`, the server notes the rifle and sniper shots of a tick and runs them once all of the tick's packets are read, the one fired first first. The fire time is the time stamp of the shot's move on the server's clock, plus half of the shooter's lowest ping of late. Two shots less than 2 ms apart keep the order they arrived in. A shooter killed by an earlier shot of the same tick loses his own shot, unless [bEnableTrades](#benabletrades) is on.
+
+It adds no delay. A shot is still traced in the tick it arrived in. `fireShared` and `fireMoved` in the `[DET-SUMMARY]` line count how often it had something to do.
 
 ## KillCamDelay
 
@@ -2286,6 +2323,8 @@ When a match ends or a player leaves, the server writes one `[DET-SUMMARY]` line
 | `hitDrawnDiff` | Shots where the shooter's trace against the players as drawn on screen said the opposite of its trace against them where the server places them |
 | `hitDrawnRight` | Of those, shots where the server agreed with the drawn players |
 | `deadShots` | Rifle and sniper shots the shooter's client fired when the server already had the shooter dead. The server fired nothing |
+| `fireShared` | Rifle and sniper shots that reached the server in the same tick as another player's shot. With [bEnableFireTimeOrder](#benablefiretimeorder) on, the server traces such shots once the tick's packets are all read, the one fired first first. The fire time is the move's time stamp mapped to the server's clock, less half the server's own ping measure. Shots fired less than 2 ms apart keep the order they arrived in. A shooter killed by an earlier shot of the same tick loses his own, unless trades are on. Needs a 469 server |
+| `fireMoved` | Of those, the shots that ran in another place than they arrived in |
 | `deadShotHits` | Of those, shots that hit a player in the shooter's own trace, so a hit sound played for a shot that did not count |
 | `eyeUsed` | Rifle and sniper shots the server started at the eye height the shooter's client sent |
 | `eyeRefused` | Shots whose sent eye height was more than 24 units from the server's own. The server used its own |

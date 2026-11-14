@@ -495,6 +495,25 @@ var int IGPlus_ClientHitVerdict;    // client: the last shot's, until its move t
 var float IGPlus_ClientHitPlayedTS; // client: when our own trace last hit a player. 0: none waiting for the server's message
 var int IGPlus_HitStatShots, IGPlus_HitStatBoth, IGPlus_HitStatClientOnly, IGPlus_HitStatServerOnly, IGPlus_HitStatHeadDiff;
 var int IGPlus_HitStatNoData; // rifle and sniper shots the server ran with no data from the client's shot
+// Fire order inside one tick (UTPure.IGPlus_FlushShots). Server: a rifle or
+// sniper shot is not traced the moment its move is read. It waits here until
+// the tick's packets are all in, with everything its trace takes from us.
+var bool IGPlus_bShotPending;
+var Weapon IGPlus_PendShotWeapon;
+var rotator IGPlus_PendShotView;
+var vector IGPlus_PendShotLoc;
+var float IGPlus_PendShotAgo;        // how long before now the shot was fired, by our estimate
+var float IGPlus_PendPRTNoteTS, IGPlus_PendPRTSeenTime, IGPlus_PendPRTViewTime, IGPlus_PendPRTLagMs;
+var int IGPlus_PendPRTNoteTick;
+var string IGPlus_PendPRTReason;
+var int IGPlus_PendVerdict, IGPlus_PendEyeByte;
+var bool IGPlus_bPendPRTInterp, IGPlus_bPendPRTInterpPast, IGPlus_bPendPRTInterpHeld;
+var float IGPlus_PendPRTInterpR;
+var bool IGPlus_bPendDrawnDiffers;
+var int IGPlus_StatFireShared;       // our shots that waited with another player's shot
+var int IGPlus_StatFireMoved;        // of those, the ones that ran in another place than they arrived in
+var float IGPlus_PingRing[4];        // the last readings of our own ping measure
+var int IGPlus_PingRingAt;
 // The eye height a deterministic hitscan shot starts at (ST_SuperShockRifle,
 // ST_SniperRifle). Each side works out EyeHeight on its own: the server once
 // a tick and never with view shake, the client once a frame. A sniper hit
@@ -615,73 +634,73 @@ var int HitMarkerTestTeam;
 
 var IGPlus_ServerMove IGPlus_ServerMove_FreeList;
 
-// Jitter Compensation (bEnableJitterCompensation), server side: a move queue
-// for a player whose packets arrive late or in clumps. See IGPlus_JCIntercept.
+// Adaptive Buffering (bEnableAdaptiveBuffering), server side: a move queue
+// for a player whose packets arrive late or in clumps. See IGPlus_ABIntercept.
 // The tuning numbers, all in one place. A slack is a number of the client's
 // move intervals plus a number of server ticks. They are first guesses: the
 // [JITTER-SUMMARY] line is there to replace them with measured ones.
-const IGPLUS_JC_ENTER_FRAMES = 1.0; // a move later than this queues the player
-const IGPLUS_JC_ENTER_TICKS = 2.0;
-const IGPLUS_JC_LEAVE_FRAMES = 0.5; // lateness under this counts as on time again
-const IGPLUS_JC_LEAVE_TICKS = 1.5;
-const IGPLUS_JC_LEAVE_DELAY_TICKS = 1.0; // the queue is left with no more delay than this
-const IGPLUS_JC_PEAK_TIME = 4.0;    // seconds until a late packet is mostly forgotten
-const IGPLUS_JC_DRAIN = 0.05;       // the clock runs at most this much fast
-const IGPLUS_JC_GRACE = 1.5;        // the next move is late after this many move intervals
-const IGPLUS_JC_MAXQUEUE = 128;     // moves kept for one player
-const IGPLUS_JC_WARMUP = 5.0;        // seconds a new arrival measure runs before it counts
-var bool IGPlus_JCPlaying;          // a queued move is running (IGPlus_JCRunHead)
-var bool IGPlus_JCKept;             // IGPlus_JCIntercept kept the move it was just shown
-var bool IGPlus_JCSeen;             // a state's xxServerMove already showed this move to IGPlus_JCIntercept
-var bool IGPlus_JCQueued;           // our moves wait in the queue
-var bool IGPlus_JCHeld;             // no move will run for a while: the other clients hold us still (IGPlus_JCHold)
-var IGPlus_ServerMove IGPlus_JCHead; // the queue, oldest first
-var int IGPlus_JCCount;
-var float IGPlus_JCDelay;           // how far the playout clock is behind the client's clock
-var float IGPlus_JCClockTime;       // Level.TimeSeconds of the clock's last advance
-var float IGPlus_JCLastRun;         // Level.TimeSeconds a queued move last ran
-var float IGPlus_JCOverNow;         // time above the cap in the stall going on
-var float IGPlus_JCNewestTS;        // newest move that arrived
-var float IGPlus_JCMoveLen;         // the client's usual move interval (average move length)
-var float IGPlus_JCMeasureStart;    // Level.TimeSeconds the arrival measure (re)started
-var float IGPlus_JCPeak;            // usual lateness: the latest packets of the last seconds
-var int IGPlus_JCDelayMs;           // IGPlus_JCDelay in real ms, 0 when not queued. Sent to our client.
-var float IGPlus_JCLogTS;
-var float IGPlus_JCEnterTime;
+const IGPLUS_AB_ENTER_FRAMES = 1.0; // a move later than this queues the player
+const IGPLUS_AB_ENTER_TICKS = 2.0;
+const IGPLUS_AB_LEAVE_FRAMES = 0.5; // lateness under this counts as on time again
+const IGPLUS_AB_LEAVE_TICKS = 1.5;
+const IGPLUS_AB_LEAVE_DELAY_TICKS = 1.0; // the queue is left with no more delay than this
+const IGPLUS_AB_PEAK_TIME = 4.0;    // seconds until a late packet is mostly forgotten
+const IGPLUS_AB_DRAIN = 0.05;       // the clock runs at most this much fast
+const IGPLUS_AB_GRACE = 1.5;        // the next move is late after this many move intervals
+const IGPLUS_AB_MAXQUEUE = 128;     // moves kept for one player
+const IGPLUS_AB_WARMUP = 5.0;        // seconds a new arrival measure runs before it counts
+var bool IGPlus_ABPlaying;          // a queued move is running (IGPlus_ABRunHead)
+var bool IGPlus_ABKept;             // IGPlus_ABIntercept kept the move it was just shown
+var bool IGPlus_ABSeen;             // a state's xxServerMove already showed this move to IGPlus_ABIntercept
+var bool IGPlus_ABQueued;           // our moves wait in the queue
+var bool IGPlus_ABHeld;             // no move will run for a while: the other clients hold us still (IGPlus_ABHold)
+var IGPlus_ServerMove IGPlus_ABHead; // the queue, oldest first
+var int IGPlus_ABCount;
+var float IGPlus_ABDelay;           // how far the playout clock is behind the client's clock
+var float IGPlus_ABClockTime;       // Level.TimeSeconds of the clock's last advance
+var float IGPlus_ABLastRun;         // Level.TimeSeconds a queued move last ran
+var float IGPlus_ABOverNow;         // time above the cap in the stall going on
+var float IGPlus_ABNewestTS;        // newest move that arrived
+var float IGPlus_ABMoveLen;         // the client's usual move interval (average move length)
+var float IGPlus_ABMeasureStart;    // Level.TimeSeconds the arrival measure (re)started
+var float IGPlus_ABPeak;            // usual lateness: the latest packets of the last seconds
+var int IGPlus_ABDelayMs;           // IGPlus_ABDelay in real ms, 0 when not queued. Sent to our client.
+var float IGPlus_ABLogTS;
+var float IGPlus_ABEnterTime;
 // The arrival measure. It runs for every player, whatever the setting.
-var bool IGPlus_JCHaveMin;
-var float IGPlus_JCMinCur;          // lowest (arrival time - timestamp) this second
-var float IGPlus_JCMinPrev[3];      // and in the 3 seconds before
-var float IGPlus_JCMinBucketEnd;
-var float IGPlus_JCWinMin;          // the lowest of those: the client's clock seen from here
-var float IGPlus_JCTickMaxTS;       // newest timestamp among this tick's arrivals
-var float IGPlus_JCTickLen;         // average server tick (AverageServerDeltaTime starts at 0 and takes seconds to get there)
-var float IGPlus_JCLastArrival;     // Level.TimeSeconds of the last move that arrived
-var float IGPlus_JCLastArrivalTS;
-// This map's numbers for the [JITTER-SUMMARY] line (IGPlus_JCLogSummary).
-var bool IGPlus_JCStatLogged;
-var int IGPlus_JCStatMoves;
-var int IGPlus_JCStatUnder1;
-var int IGPlus_JCStatUnder2;
-var int IGPlus_JCStatOver50;
+var bool IGPlus_ABHaveMin;
+var float IGPlus_ABMinCur;          // lowest (arrival time - timestamp) this second
+var float IGPlus_ABMinPrev[3];      // and in the 3 seconds before
+var float IGPlus_ABMinBucketEnd;
+var float IGPlus_ABWinMin;          // the lowest of those: the client's clock seen from here
+var float IGPlus_ABTickMaxTS;       // newest timestamp among this tick's arrivals
+var float IGPlus_ABTickLen;         // average server tick (AverageServerDeltaTime starts at 0 and takes seconds to get there)
+var float IGPlus_ABLastArrival;     // Level.TimeSeconds of the last move that arrived
+var float IGPlus_ABLastArrivalTS;
+// This map's numbers for the [JITTER-SUMMARY] line (IGPlus_ABLogSummary).
+var bool IGPlus_ABStatLogged;
+var int IGPlus_ABStatMoves;
+var int IGPlus_ABStatUnder1;
+var int IGPlus_ABStatUnder2;
+var int IGPlus_ABStatOver50;
 // Moves later than the slack that queues a player, the times such a move came
 // with none in the 3 seconds before it, and the slack itself added up.
-var int IGPlus_JCStatOverSlack, IGPlus_JCStatSlackEvents;
-var float IGPlus_JCStatSlackTS, IGPlus_JCStatSlackSum;
-var float IGPlus_JCStatLateSum;
-var float IGPlus_JCStatLateMax;
-var float IGPlus_JCStatTickSum;
-var float IGPlus_JCStatTickMax;
-var float IGPlus_JCStatGapMax;
-var int IGPlus_JCStatGap50;
-var int IGPlus_JCStatGap100;
-var int IGPlus_JCStatLongMoves;
-var int IGPlus_JCStatQueuedMoves;
-var int IGPlus_JCStatEnters;
-var int IGPlus_JCStatStalls;
-var float IGPlus_JCStatQueuedTime;
-var float IGPlus_JCStatDelayMax;
-var float IGPlus_JCStatOverCap;
+var int IGPlus_ABStatOverSlack, IGPlus_ABStatSlackEvents;
+var float IGPlus_ABStatSlackTS, IGPlus_ABStatSlackSum;
+var float IGPlus_ABStatLateSum;
+var float IGPlus_ABStatLateMax;
+var float IGPlus_ABStatTickSum;
+var float IGPlus_ABStatTickMax;
+var float IGPlus_ABStatGapMax;
+var int IGPlus_ABStatGap50;
+var int IGPlus_ABStatGap100;
+var int IGPlus_ABStatLongMoves;
+var int IGPlus_ABStatQueuedMoves;
+var int IGPlus_ABStatEnters;
+var int IGPlus_ABStatStalls;
+var float IGPlus_ABStatQueuedTime;
+var float IGPlus_ABStatDelayMax;
+var float IGPlus_ABStatOverCap;
 var IGPlus_WeaponImplementationBase IGPlus_WImpBase;
 	const IGPLUS_DetWEAPON_None = 0;
 	const IGPLUS_DetWEAPON_ShockRifle = 1;
@@ -776,7 +795,7 @@ var bool IGPlus_WeaponSettingsMenuCanEdit;
 struct IGPlus_WarpFix {
 	var vector OldLocation;
 	var int Counter;
-	// Jitter Compensation: the server holds this player still at OldLocation
+	// Adaptive Buffering: the server holds this player still at OldLocation
 	// (the move queue ran empty). Other clients stop moving them along at once.
 	var bool bHold;
 };
@@ -928,6 +947,64 @@ var bool IGPlus_UseFastWeaponSwitch;
 
 var bool IGPlus_EnableInputReplication;
 var bool IGPlus_EnableSnapshotInterpolation;
+// Tick Interpolation (server setting bEnableTickInterpolation). Other players
+// are drawn between two real updates, a little in the past, and a shot is
+// tested against the exact spot the shooter's screen drew.
+var bool IGPlus_EnableTickInterp;    // server: the setting is active. Sent with every pawn.
+var byte IGPlus_NetTick;             // server: the low 8 bits of the tick our last move ran in. Sent with every pawn.
+// Server: where we stood at the end of that tick. Sent with every pawn, in a
+// value of its own: the engine blends a pawn's Location into the client's
+// copy (AActor::PostNetReceive, 15% of the way when the pawn is near), so a
+// client that gets two updates in one frame never sees the second spot.
+var vector IGPlus_NetLoc;
+var float IGPlus_TI_MoveTS;          // server: the move time that stamp belongs to
+var int IGPlus_TI_ServerTick;        // server: the number of the current tick. Sent to our own client.
+// Client, on our own pawn: the server's tick clock as we see it.
+var int IGPlus_TI_SeenTick;          // the newest tick number that arrived
+var float IGPlus_TI_SeenAt;          // our time when it arrived
+var float IGPlus_TI_TickLen;         // our estimate of one server tick, in our seconds
+var float IGPlus_TI_Clock;           // the server tick position now, smoothed
+var float IGPlus_PRTShotR;           // the tick position this frame's shot reports (its target's)
+var bool IGPlus_bPRTShotPast;        // and whether the target was drawn past its newest update
+var bool IGPlus_bPRTShotHeld;        // and whether it stood still there, held by the server
+// Client, on another player's pawn: its last 16 updates with their tick numbers, oldest first from IGPlus_TI_Head - IGPlus_TI_Num.
+// 16 covers the longest delay (IGPLUS_TI_MAX_DELAY) with an update in every tick.
+var int IGPlus_TI_Tick[16];
+var vector IGPlus_TI_Loc[16];
+var vector IGPlus_TI_Vel[16];
+var int IGPlus_TI_Head, IGPlus_TI_Num;
+var bool IGPlus_TI_bHasByte;
+var byte IGPlus_TI_LastByte;
+var float IGPlus_TI_Gap;             // ticks between its updates, of late
+var float IGPlus_TI_Delay;           // how many ticks behind the clock it is drawn
+var float IGPlus_TI_DrawnR;          // the tick position it was drawn at this frame
+var bool IGPlus_TI_bDrawnPast;       // that was past its newest update: it was carried on or stood still
+var float IGPlus_ShownR;             // the same two for the last frame that was drawn (PreRender)
+var bool IGPlus_bShownPast;
+var bool IGPlus_TI_bDrawnHeld;       // drawn past its newest update while the server holds it still: not carried on
+var bool IGPlus_bShownHeld;
+var bool IGPlus_TI_bStopped;         // the body stands still this frame: held, or the carry has run out
+// The crouch that came with each update, and the one that goes with the tick
+// position drawn: the older update's, as the server takes the older snapshot's.
+var byte IGPlus_TI_Duck[16];
+var byte IGPlus_TI_DrawnDuck;
+var byte IGPlus_ShownDuck;
+// The animation as the engine plays it (the newest the server sent), noted
+// frame by frame, so the body's animation is drawn from the same moment as its spot.
+var name IGPlus_TI_AnimSeqH[64];
+var float IGPlus_TI_AnimFrameH[64];
+var float IGPlus_TI_AnimTimeH[64];
+var int IGPlus_TI_AnimHead, IGPlus_TI_AnimNum;
+var name IGPlus_TI_RawSeq, IGPlus_TI_ShownSeq;
+var float IGPlus_TI_RawFrame, IGPlus_TI_ShownFrame;
+var bool IGPlus_TI_bAnimSwapped;
+// Server: the last report was a tick position (IGPlus_PRTNoteInterp).
+var bool IGPlus_bPRTInterp, IGPlus_bPRTInterpPast, IGPlus_bPRTInterpHeld;
+var float IGPlus_PRTInterpR;
+const IGPLUS_TI_EXTRA = 1.0;         // ticks of delay on top of the gap between a player's updates
+const IGPLUS_TI_MIN_DELAY = 2.0;
+const IGPLUS_TI_MAX_DELAY = 10.0;
+const IGPLUS_TI_MAX_CARRY = 2.0;     // ticks a player is carried on past their newest update
 var bool IGPlus_PressedJumpSave;
 var IGPlus_SavedInputChain IGPlus_SavedInputChain;
 var IGPlus_DataBuffer IGPlus_InputReplicationBuffer;
@@ -1006,7 +1083,8 @@ replication
 		IGPlus_PredictedDiscBoost,
 		IGPlus_PRTServerTick,
 		IGPlus_DetServerShotTS,
-		IGPlus_JCDelayMs,
+		IGPlus_TI_ServerTick,
+		IGPlus_ABDelayMs,
 		KillCamDelay,
 		KillCamDuration,
 		LastKiller,
@@ -1036,6 +1114,9 @@ replication
 		IGPlus_AdditionalReplicationInfo,
 		IGPlus_WarpFixData,
 		IGPlus_EnableSnapshotInterpolation,
+		IGPlus_EnableTickInterp,
+		IGPlus_NetTick,
+		IGPlus_NetLoc,
 		IGPlus_SnapReplicatedData,
 		IGPlus_SnapReplicatedDataPrev;
 
@@ -1364,7 +1445,7 @@ simulated event Destroyed() {
 		IGPlus_SKBall.Destroy();
 	if (Role == ROLE_Authority)
 		IGPlus_DetLogSummary();
-	IGPlus_JCDropQueue();
+	IGPlus_ABDropQueue();
 	super.Destroyed();
 }
 
@@ -1920,6 +2001,7 @@ event Possess()
 		IGPlus_WeaponSettingsName = zzUTPure.IGPlus_WeaponSettingsName();
 		IGPlus_WeaponSettingsMode = zzUTPure.IGPlus_WeaponSettingsMode();
 		IGPlus_EnableSnapshotInterpolation = zzUTPure.Settings.bEnableSnapshotInterpolation;
+		IGPlus_EnableTickInterp = zzUTPure.Settings.TickInterpolationActive();
 
 		ShowDamageNumberMode = zzUTPure.IGPlus_DamageNumberMode();
 
@@ -3632,7 +3714,40 @@ function UpdatePing() {
 // Precise Rewind Time report, one int on a move: bits 0-14 the tick of the
 // update our screen showed, bit 15 set, bits 16-31 how far past it, in 0.1 ms.
 static function int IGPlus_PRTPack(int Tick, float Age) {
-	return (Tick & 0x7FFF) | 0x8000 | (Clamp(int(Age * 10000.0), 0, 0xFFFF) << 16);
+	// (The top bit stays clear: it marks a tick position, IGPlus_TI_Pack.)
+	return (Tick & 0x7FFF) | 0x8000 | (Clamp(int(Age * 10000.0), 0, 0x7FFF) << 16);
+}
+// Tick Interpolation: the tick position the screen drew at. 15 bits of the
+// tick number, 8 bits of the way to the next tick, and the top bit as mark.
+// bPast: the player was drawn past their newest update (carried on, or
+// standing still). The server then has to do the same, and not use an update
+// that reached us later.
+// bHeld: and there they stood still, because the server said it holds them.
+static function int IGPlus_TI_Pack(float R, optional bool bPast, optional bool bHeld) {
+	local int T, D;
+
+	if (R < 0.0)
+		R = 0.0;
+	T = int(R);
+	D = (T & 0x7FFF) | 0x8000 | ((Clamp(int((R - float(T)) * 256.0), 0, 255)) << 16) | (1 << 31);
+	if (bPast)
+		D = D | (1 << 24);
+	if (bPast && bHeld)
+		D = D | (1 << 25);
+	return D;
+}
+// How many ticks a player is carried on by their velocity, Past ticks after
+// their newest update. None while the server holds them still (Adaptive
+// Buffering, their queue ran empty): it says so, and a guess would have to be
+// taken back when their next update comes. Client and server both use this.
+static function float IGPlus_TI_CarryTicks(float Past, bool bHeld) {
+	if (bHeld || Past <= 0.0)
+		return 0.0;
+	return FMin(Past, IGPLUS_TI_MAX_CARRY);
+}
+// The server's reading of it. NowTick is the server's newest tick number.
+static function float IGPlus_TI_Unpack(int Data, int NowTick) {
+	return float(NowTick - ((NowTick - (Data & 0x7FFF)) & 0x7FFF)) + float((Data >>> 16) & 0xFF) / 256.0;
 }
 
 // How many of our ticks ago the report's update was sent (the newest tick
@@ -3653,6 +3768,11 @@ function IGPlus_PRTNote(int Data) {
 	local int Back;
 
 	WS = GetWeaponSettings();
+	IGPlus_bPRTInterp = false;
+	if (Data < 0 && IGPlus_EnableTickInterp && zzUTPure != None) {
+		IGPlus_PRTNoteInterp(Data, WS);
+		return;
+	}
 	// We keep the times of our last 64 ticks.
 	Back = IGPlus_PRTTicksBack(IGPlus_PRTServerTick, Data);
 	IGPlus_PRTNoteTS = Level.TimeSeconds;
@@ -3674,10 +3794,45 @@ function IGPlus_PRTNote(int Data) {
 		IGPlus_PRTReason = "report ahead of our clock";
 	else if (IGPlus_PRTLagMs > WS.PingCompensationMax)
 		IGPlus_PRTReason = "above PingCompensationMax";
-	// (A queued move ran IGPlus_JCDelayMs after it arrived, Jitter
-	// Compensation: the report is that much older than our ping.)
+	// (A queued move ran IGPlus_ABDelayMs after it arrived, Adaptive
+	// Buffering: the report is that much older than our ping.)
 	else if (IGPlus_PRTServerPing > 0
-		&& Abs(IGPlus_PRTLagMs - IGPlus_PRTServerPing - IGPlus_JCDelayMs) > WS.PreciseRewindTimeMaxDeviationMs)
+		&& Abs(IGPlus_PRTLagMs - IGPlus_PRTServerPing - IGPlus_ABDelayMs) > WS.PreciseRewindTimeMaxDeviationMs)
+		IGPlus_PRTReason = "server ping"@int(IGPlus_PRTServerPing)@"ms";
+	IGPlus_PRTLagMs = FMax(0, IGPlus_PRTLagMs);
+}
+
+// Server, Tick Interpolation: the report is the tick position the shooter's
+// screen drew the shot's target at.
+function IGPlus_PRTNoteInterp(int Data, WeaponSettingsRepl WS) {
+	local int G;
+	local float TickLen, MaxLag;
+
+	G = zzUTPure.IGPlus_GlobalTick;
+	TickLen = FMax(AverageServerDeltaTime, 0.001);
+	IGPlus_bPRTInterp = true;
+	IGPlus_bPRTInterpPast = (Data & (1 << 24)) != 0;
+	IGPlus_bPRTInterpHeld = (Data & (1 << 25)) != 0;
+	IGPlus_PRTInterpR = IGPlus_TI_Unpack(Data, G);
+	IGPlus_PRTNoteTS = Level.TimeSeconds;
+	IGPlus_PRTNoteTick = IGPlus_PRTServerTick;
+	IGPlus_PRTSeenTime = Level.TimeSeconds - (float(G) - IGPlus_PRTInterpR) * TickLen;
+	IGPlus_PRTViewTime = IGPlus_PRTSeenTime;
+	IGPlus_PRTLagMs = 1000.0 * (float(G) - IGPlus_PRTInterpR) * TickLen / Level.TimeDilation;
+	IGPlus_PRTReason = "";
+	// The screen is our ping behind, plus the delay it draws a player with.
+	MaxLag = IGPlus_PRTServerPing + 1000.0 * (IGPLUS_TI_MAX_DELAY + 2.0) * TickLen / Level.TimeDilation;
+	if (WS == none || WS.bEnablePreciseRewindTime == false)
+		IGPlus_PRTReason = "off";
+	else if (float(G) - IGPlus_PRTInterpR > 16000.0)
+		IGPlus_PRTReason = "update too old";
+	else if (IGPlus_PRTLagMs < -50)
+		IGPlus_PRTReason = "report ahead of our clock";
+	else if (IGPlus_PRTLagMs > WS.PingCompensationMax)
+		IGPlus_PRTReason = "above PingCompensationMax";
+	else if (IGPlus_PRTServerPing > 0
+		&& (IGPlus_PRTLagMs < IGPlus_PRTServerPing + IGPlus_ABDelayMs - WS.PreciseRewindTimeMaxDeviationMs
+			|| IGPlus_PRTLagMs > MaxLag + IGPlus_ABDelayMs + WS.PreciseRewindTimeMaxDeviationMs))
 		IGPlus_PRTReason = "server ping"@int(IGPlus_PRTServerPing)@"ms";
 	IGPlus_PRTLagMs = FMax(0, IGPlus_PRTLagMs);
 }
@@ -3837,8 +3992,8 @@ function bool IGPlus_IsFlagCarrier() {
 function bool IGPlus_ShouldJitterBound() {
 	if (zzUTPure == none || zzUTPure.Settings == none)
 		return false;
-	// Jitter Compensation replaces jitter bounding.
-	if (zzUTPure.Settings.JitterCompensationActive())
+	// Adaptive Buffering replaces jitter bounding.
+	if (zzUTPure.Settings.AdaptiveBufferingActive())
 		return false;
 
 	switch (zzUTPure.Settings.JitterBoundingMode) {
@@ -3909,8 +4064,8 @@ function ExtrapolationDiscardData() {
 
 function WarpCompensation(float DeltaTime) {
 	if (Level.Pauser == "" && !bWasPaused) {
-		// (Not a queued player, Jitter Compensation: they wait, no guessing.)
-		if (zzUTPure.Settings.bEnableServerExtrapolation && IGPlus_JCQueued == false &&
+		// (Not a queued player, Adaptive Buffering: they wait, no guessing.)
+		if (zzUTPure.Settings.bEnableServerExtrapolation && IGPlus_ABQueued == false &&
 			bExtrapolatedLastUpdate == false && ExtrapolationDelta > AverageServerDeltaTime
 		) {
 			bExtrapolatedLastUpdate = true;
@@ -3960,8 +4115,8 @@ simulated function float GetMoverFireZOffset(optional bool bFullPing) {
 
 	if (bFullPing)
 		Latency = PlayerReplicationInfo.Ping * 0.001 * Level.TimeDilation;
-	else // one way: plus the other half of the Jitter Compensation delay
-		Latency = (PlayerReplicationInfo.Ping + IGPlus_JCDelayMs) * 0.0005 * Level.TimeDilation;
+	else // one way: plus the other half of the Adaptive Buffering delay
+		Latency = (PlayerReplicationInfo.Ping + IGPlus_ABDelayMs) * 0.0005 * Level.TimeDilation;
 
 	if (zzUTPure != None) {
 		MD = zzUTPure.FindMoverDummy(Mover(Base));
@@ -5071,7 +5226,7 @@ function IGPlus_EventLog(string S) {
 function IGPlus_DetLogSummary() {
 	local float EyeAvg;
 
-	IGPlus_JCLogSummary();
+	IGPlus_ABLogSummary();
 
 	if (IGPlus_bDetStatLogged || PlayerReplicationInfo == None)
 		return;
@@ -5094,6 +5249,7 @@ function IGPlus_DetLogSummary() {
 		@"hitHeadDiff="$IGPlus_HitStatHeadDiff
 		@"hitDrawnDiff="$IGPlus_HitStatDrawnDiff@"hitDrawnRight="$IGPlus_HitStatDrawnRight
 		@"deadShots="$IGPlus_HitStatDeadShots@"deadShotHits="$IGPlus_HitStatDeadHits
+		@"fireShared="$IGPlus_StatFireShared@"fireMoved="$IGPlus_StatFireMoved
 		@"eyeUsed="$IGPlus_HitStatEyeUsed@"eyeRefused="$IGPlus_HitStatEyeRefused
 		@"eyeDiffAvg="$EyeAvg@"eyeDiffMax="$IGPlus_HitStatEyeDiffMax
 		@"ping="$PlayerReplicationInfo.Ping@"lostMoves="$IGPlus_DetLostMoves);
@@ -5529,8 +5685,8 @@ function IGPlus_ApplyServerMove(IGPlus_ServerMove SM) {
 		if (Level.Pauser == "" && bWasPaused)
 			ServerDeltaTime = FMin(ServerDeltaTime, SM.MoveDeltaTime);
 	}
-	// (A queued move was measured when it arrived, IGPlus_JCIntercept.)
-	if (Level.Pauser == "" && !bWasPaused && IGPlus_JCPlaying == false)
+	// (A queued move was measured when it arrived, IGPlus_ABIntercept.)
+	if (Level.Pauser == "" && !bWasPaused && IGPlus_ABPlaying == false)
 		IGPlus_DetUpdateFireClockLead(SM.TimeStamp, ServerDeltaTime);
 
 	if (zzUTPure.Settings.bEnableWarpFix && ServerDeltaTime > zzUTPure.Settings.WarpFixDelay) {
@@ -6093,165 +6249,165 @@ function bool IGPlus_OldServerMove(float TimeStamp, int OldMoveData1, int OldMov
 }
 
 // =============================================================================
-// Jitter Compensation (bEnableJitterCompensation, IGPlus_JC...)
+// Adaptive Buffering (bEnableAdaptiveBuffering, IGPlus_AB...)
 //
 // A move runs the moment its packet arrives. Packets that come late and
 // together make the player stand still on the server and then cover all that
-// time in one tick. With Jitter Compensation the moves of such a player wait
+// time in one tick. With Adaptive Buffering the moves of such a player wait
 // in a queue and run on a clock of their own: the player's time (the move
 // timestamps), advancing with server time. A player whose packets arrive on
 // time is not queued and runs through the code as before.
 //
-// Arrival (xxServerMove in any state): IGPlus_JCIntercept measures how late
+// Arrival (xxServerMove in any state): IGPlus_ABIntercept measures how late
 // the move is and keeps it for a queued player.
 // Playout (CheckClientError: the engine calls it right after it took in this
-// tick's packets, which is where arriving moves run too): IGPlus_JCPlayout
+// tick's packets, which is where arriving moves run too): IGPlus_ABPlayout
 // advances the clock and runs the moves it has reached, through xxServerMove
 // of the state the player is in by then.
 //
-// The delay (IGPlus_JCDelay) is how far the clock is behind the client's own
+// The delay (IGPlus_ABDelay) is how far the clock is behind the client's own
 // clock. It grows when the next move is late: the clock stands still and the
 // player with it (no guessed input, so no corrections). It shrinks with the
 // clock running up to 5% fast, down to the player's usual lateness. Above
-// JitterCompensationMax the moves run at once, as without the queue.
+// AdaptiveBufferingMax the moves run at once, as without the queue.
 // All times are game time (real seconds * Level.TimeDilation).
 // =============================================================================
 
-function bool IGPlus_JCActive() {
+function bool IGPlus_ABActive() {
 	return zzUTPure != none && zzUTPure.Settings != none && bIs469Server
-		&& zzUTPure.Settings.JitterCompensationActive() && zzUTPure.Settings.JitterCompensationMax > 0;
+		&& zzUTPure.Settings.AdaptiveBufferingActive() && zzUTPure.Settings.AdaptiveBufferingMax > 0;
 }
 
 // The timestamp a move in this tick's packets carries when nothing held it
 // up. The engine advances Level.TimeSeconds after it takes in the packets, so
 // they arrive one tick later than it says there.
-function float IGPlus_JCBase() {
-	return Level.TimeSeconds + IGPlus_JCTickLen - IGPlus_JCWinMin;
+function float IGPlus_ABBase() {
+	return Level.TimeSeconds + IGPlus_ABTickLen - IGPlus_ABWinMin;
 }
 
-function float IGPlus_JCMaxDelay() {
-	return zzUTPure.Settings.JitterCompensationMax * 0.001 * Level.TimeDilation;
+function float IGPlus_ABMaxDelay() {
+	return zzUTPure.Settings.AdaptiveBufferingMax * 0.001 * Level.TimeDilation;
 }
 
-function IGPlus_JCSetDelayMs() {
-	if (IGPlus_JCQueued)
-		IGPlus_JCDelayMs = int(1000.0 * FMax(0.0, IGPlus_JCDelay) / Level.TimeDilation + 0.5);
+function IGPlus_ABSetDelayMs() {
+	if (IGPlus_ABQueued)
+		IGPlus_ABDelayMs = int(1000.0 * FMax(0.0, IGPlus_ABDelay) / Level.TimeDilation + 0.5);
 	else
-		IGPlus_JCDelayMs = 0;
+		IGPlus_ABDelayMs = 0;
 }
 
 // A number with one decimal, for the log lines.
-static function string IGPlus_JCFmt(float F) {
+static function string IGPlus_ABFmt(float F) {
 	local int T;
 
 	T = int(F * 10.0 + 0.5);
 	return (T / 10)$"."$(T - (T / 10) * 10);
 }
 
-// One [JITTER] line when a player enters or leaves the queue, at most one a
+// One [BUFFER] line when a player enters or leaves the queue, at most one a
 // second for each player.
-function IGPlus_JCLog(string What) {
+function IGPlus_ABLog(string What) {
 	if (PlayerReplicationInfo == none)
 		return;
-	if (IGPlus_JCLogTS > 0.0 && Level.TimeSeconds - IGPlus_JCLogTS < Level.TimeDilation)
+	if (IGPlus_ABLogTS > 0.0 && Level.TimeSeconds - IGPlus_ABLogTS < Level.TimeDilation)
 		return;
-	IGPlus_JCLogTS = Level.TimeSeconds;
-	IGPlus_EventLog("[JITTER]"@PlayerReplicationInfo.PlayerName@What
-		@"delayMs="$IGPlus_JCDelayMs
-		@"usualLateMs="$int(1000.0 * IGPlus_JCPeak / Level.TimeDilation)
-		@"tickMs="$IGPlus_JCFmt(1000.0 * IGPlus_JCTickLen / Level.TimeDilation)
+	IGPlus_ABLogTS = Level.TimeSeconds;
+	IGPlus_EventLog("[BUFFER]"@PlayerReplicationInfo.PlayerName@What
+		@"delayMs="$IGPlus_ABDelayMs
+		@"usualLateMs="$int(1000.0 * IGPlus_ABPeak / Level.TimeDilation)
+		@"tickMs="$IGPlus_ABFmt(1000.0 * IGPlus_ABTickLen / Level.TimeDilation)
 		@"ping="$PlayerReplicationInfo.Ping);
 }
 
 // Server: this map's numbers for one arriving move. Late: how far behind the
 // client's clock it arrived. Gap: server time since the move before it.
-function IGPlus_JCNoteArrival(float Late, float Gap, float MoveLen, float Tick) {
+function IGPlus_ABNoteArrival(float Late, float Gap, float MoveLen, float Tick) {
 	local float Ms, Ticks, Slack;
 
 	Ms = 1000.0 * Late / Level.TimeDilation;
 	Ticks = Late / Tick;
-	IGPlus_JCStatMoves++;
-	IGPlus_JCStatLateSum += Ms;
-	IGPlus_JCStatLateMax = FMax(IGPlus_JCStatLateMax, Ms);
-	IGPlus_JCStatTickSum += Ticks;
-	IGPlus_JCStatTickMax = FMax(IGPlus_JCStatTickMax, Ticks);
+	IGPlus_ABStatMoves++;
+	IGPlus_ABStatLateSum += Ms;
+	IGPlus_ABStatLateMax = FMax(IGPlus_ABStatLateMax, Ms);
+	IGPlus_ABStatTickSum += Ticks;
+	IGPlus_ABStatTickMax = FMax(IGPlus_ABStatTickMax, Ticks);
 	if (Ticks < 1.0)
-		IGPlus_JCStatUnder1++;
+		IGPlus_ABStatUnder1++;
 	if (Ticks < 2.0)
-		IGPlus_JCStatUnder2++;
+		IGPlus_ABStatUnder2++;
 	if (Ms > 50.0)
-		IGPlus_JCStatOver50++;
-	// Would this move have queued the player (IGPlus_JCIntercept)? Counted
+		IGPlus_ABStatOver50++;
+	// Would this move have queued the player (IGPlus_ABIntercept)? Counted
 	// with the setting off too, to set the slack from real connections.
-	Slack = IGPLUS_JC_ENTER_FRAMES * IGPlus_JCMoveLen + IGPLUS_JC_ENTER_TICKS * Tick;
-	IGPlus_JCStatSlackSum += 1000.0 * Slack / Level.TimeDilation;
+	Slack = IGPLUS_AB_ENTER_FRAMES * IGPlus_ABMoveLen + IGPLUS_AB_ENTER_TICKS * Tick;
+	IGPlus_ABStatSlackSum += 1000.0 * Slack / Level.TimeDilation;
 	if (Late > Slack) {
-		IGPlus_JCStatOverSlack++;
-		if (IGPlus_JCStatSlackTS <= 0.0 || Level.TimeSeconds - IGPlus_JCStatSlackTS > 3.0 * Level.TimeDilation)
-			IGPlus_JCStatSlackEvents++;
-		IGPlus_JCStatSlackTS = Level.TimeSeconds;
+		IGPlus_ABStatOverSlack++;
+		if (IGPlus_ABStatSlackTS <= 0.0 || Level.TimeSeconds - IGPlus_ABStatSlackTS > 3.0 * Level.TimeDilation)
+			IGPlus_ABStatSlackEvents++;
+		IGPlus_ABStatSlackTS = Level.TimeSeconds;
 	}
 	Ms = 1000.0 * Gap / Level.TimeDilation;
-	IGPlus_JCStatGapMax = FMax(IGPlus_JCStatGapMax, Ms);
+	IGPlus_ABStatGapMax = FMax(IGPlus_ABStatGapMax, Ms);
 	if (Ms > 50.0)
-		IGPlus_JCStatGap50++;
+		IGPlus_ABStatGap50++;
 	if (Ms > 100.0)
-		IGPlus_JCStatGap100++;
+		IGPlus_ABStatGap100++;
 	if (1000.0 * MoveLen / Level.TimeDilation > 50.0)
-		IGPlus_JCStatLongMoves++;
+		IGPlus_ABStatLongMoves++;
 }
 
 // Server: one [JITTER-SUMMARY] line with how this player's moves arrived on
 // this map, written with the [DET-SUMMARY] line (IGPlus_DetLogSummary) and
-// whatever the Jitter Compensation setting. Lateness is how far behind the
+// whatever the Adaptive Buffering setting. Lateness is how far behind the
 // client's clock a move arrived (the lowest arrival offset of the last 3 to 4
 // seconds), in real ms and in server ticks. A gap is the server time between
 // two arrivals. lostMoves are the holes lost moves left (the [DET-SUMMARY]
 // count). longMoves are moves over 50 ms (a hitch on the client). The last
 // fields are the queue's: moves that waited in it, time spent queued, times
 // entered, times the clock stood still, the highest delay, and the time above
-// JitterCompensationMax that ran at once.
-function IGPlus_JCLogSummary() {
+// AdaptiveBufferingMax that ran at once.
+function IGPlus_ABLogSummary() {
 	local float N;
 
-	if (IGPlus_JCStatLogged || PlayerReplicationInfo == none || IGPlus_JCStatMoves == 0)
+	if (IGPlus_ABStatLogged || PlayerReplicationInfo == none || IGPlus_ABStatMoves == 0)
 		return;
-	IGPlus_JCStatLogged = true;
-	N = float(IGPlus_JCStatMoves);
+	IGPlus_ABStatLogged = true;
+	N = float(IGPlus_ABStatMoves);
 	IGPlus_EventLog("[JITTER-SUMMARY]"@PlayerReplicationInfo.PlayerName
-		@"moves="$IGPlus_JCStatMoves
-		@"lateMsAvg="$IGPlus_JCFmt(IGPlus_JCStatLateSum / N)@"lateMsMax="$int(IGPlus_JCStatLateMax)
-		@"lateTicksAvg="$IGPlus_JCFmt(IGPlus_JCStatTickSum / N)@"lateTicksMax="$IGPlus_JCFmt(IGPlus_JCStatTickMax)
-		@"under1Tick="$IGPlus_JCFmt(100.0 * IGPlus_JCStatUnder1 / N)$"%"
-		@"under2Ticks="$IGPlus_JCFmt(100.0 * IGPlus_JCStatUnder2 / N)$"%"
-		@"over50ms="$IGPlus_JCFmt(100.0 * IGPlus_JCStatOver50 / N)$"%"
-		@"slackMs="$IGPlus_JCFmt(IGPlus_JCStatSlackSum / N)@"overSlack="$IGPlus_JCStatOverSlack@"overSlackEvents="$IGPlus_JCStatSlackEvents
-		@"gapMsMax="$int(IGPlus_JCStatGapMax)@"gaps50="$IGPlus_JCStatGap50@"gaps100="$IGPlus_JCStatGap100
-		@"lostMoves="$IGPlus_DetLostMoves@"longMoves="$IGPlus_JCStatLongMoves
-		@"tickMs="$IGPlus_JCFmt(1000.0 * IGPlus_JCTickLen / Level.TimeDilation)
-		@"queuedMoves="$IGPlus_JCStatQueuedMoves
-		@"queuedSec="$IGPlus_JCFmt(IGPlus_JCStatQueuedTime / Level.TimeDilation)
-		@"queueEntries="$IGPlus_JCStatEnters@"stalls="$IGPlus_JCStatStalls
-		@"delayMsMax="$int(IGPlus_JCStatDelayMax)
-		@"overCapMs="$int(1000.0 * IGPlus_JCStatOverCap / Level.TimeDilation)
+		@"moves="$IGPlus_ABStatMoves
+		@"lateMsAvg="$IGPlus_ABFmt(IGPlus_ABStatLateSum / N)@"lateMsMax="$int(IGPlus_ABStatLateMax)
+		@"lateTicksAvg="$IGPlus_ABFmt(IGPlus_ABStatTickSum / N)@"lateTicksMax="$IGPlus_ABFmt(IGPlus_ABStatTickMax)
+		@"under1Tick="$IGPlus_ABFmt(100.0 * IGPlus_ABStatUnder1 / N)$"%"
+		@"under2Ticks="$IGPlus_ABFmt(100.0 * IGPlus_ABStatUnder2 / N)$"%"
+		@"over50ms="$IGPlus_ABFmt(100.0 * IGPlus_ABStatOver50 / N)$"%"
+		@"slackMs="$IGPlus_ABFmt(IGPlus_ABStatSlackSum / N)@"overSlack="$IGPlus_ABStatOverSlack@"overSlackEvents="$IGPlus_ABStatSlackEvents
+		@"gapMsMax="$int(IGPlus_ABStatGapMax)@"gaps50="$IGPlus_ABStatGap50@"gaps100="$IGPlus_ABStatGap100
+		@"lostMoves="$IGPlus_DetLostMoves@"longMoves="$IGPlus_ABStatLongMoves
+		@"tickMs="$IGPlus_ABFmt(1000.0 * IGPlus_ABTickLen / Level.TimeDilation)
+		@"queuedMoves="$IGPlus_ABStatQueuedMoves
+		@"queuedSec="$IGPlus_ABFmt(IGPlus_ABStatQueuedTime / Level.TimeDilation)
+		@"queueEntries="$IGPlus_ABStatEnters@"stalls="$IGPlus_ABStatStalls
+		@"delayMsMax="$int(IGPlus_ABStatDelayMax)
+		@"overCapMs="$int(1000.0 * IGPlus_ABStatOverCap / Level.TimeDilation)
 		@"ping="$PlayerReplicationInfo.Ping);
 }
 
 // Server: this player stands still from here on. The other clients stop
 // moving them along (bHold in IGPlus_WarpFixData, sent with this tick's
-// position) until a move runs again (IGPlus_JCRunHead).
-function IGPlus_JCHold() {
-	if (IGPlus_JCHeld)
+// position) until a move runs again (IGPlus_ABRunHead).
+function IGPlus_ABHold() {
+	if (IGPlus_ABHeld)
 		return;
-	IGPlus_JCHeld = true;
-	IGPlus_JCStatStalls++;
+	IGPlus_ABHeld = true;
+	IGPlus_ABStatStalls++;
 }
 
 // Server: a move just arrived (called first thing by xxServerMove in every
-// state). Measures its lateness. Sets IGPlus_JCKept when the player is queued
+// state). Measures its lateness. Sets IGPlus_ABKept when the player is queued
 // and the move waits: the caller then does nothing more with it. (A variable
 // and not a return value: 16 parameters is all a function can have.)
-function IGPlus_JCIntercept(
+function IGPlus_ABIntercept(
 	float TimeStamp,
 	int MoveDeltaTime,
 	vector Accel,
@@ -6272,63 +6428,63 @@ function IGPlus_JCIntercept(
 	local float MoveLen, Gap, Late, Tick;
 	local IGPlus_ServerMove SM, Prev;
 
-	IGPlus_JCKept = false;
+	IGPlus_ABKept = false;
 	// A queued move being run, or a move a state's xxServerMove showed us
 	// already and now passes on to the global one.
-	if (IGPlus_JCPlaying)
+	if (IGPlus_ABPlaying)
 		return;
-	if (IGPlus_JCSeen) {
-		IGPlus_JCSeen = false;
+	if (IGPlus_ABSeen) {
+		IGPlus_ABSeen = false;
 		return;
 	}
 	if (Role < ROLE_Authority || bDeleteMe)
 		return;
 
 	MoveLen = IGPlus_UnpackDelta(MoveDeltaTime); // the top byte is a shot's eye height
-	Gap = Level.TimeSeconds - IGPlus_JCLastArrival;
+	Gap = Level.TimeSeconds - IGPlus_ABLastArrival;
 	// Paused, the first move, a long silence, or a client clock that went
 	// back: nothing to measure against. Start over, this move runs now.
-	if (Level.Pauser != "" || bWasPaused || IGPlus_JCHaveMin == false || Gap > 2.0
-		|| TimeStamp < IGPlus_JCLastArrivalTS - 0.5) {
-		if (IGPlus_JCQueued)
-			IGPlus_JCLeave("reset");
-		IGPlus_JCHaveMin = false;
-		IGPlus_JCMeasureStart = Level.TimeSeconds;
-		IGPlus_JCPeak = 0.0;
-		IGPlus_JCTickMaxTS = TimeStamp;
-		IGPlus_JCLastArrival = Level.TimeSeconds;
-		IGPlus_JCLastArrivalTS = TimeStamp;
-		IGPlus_JCNewestTS = TimeStamp;
+	if (Level.Pauser != "" || bWasPaused || IGPlus_ABHaveMin == false || Gap > 2.0
+		|| TimeStamp < IGPlus_ABLastArrivalTS - 0.5) {
+		if (IGPlus_ABQueued)
+			IGPlus_ABLeave("reset");
+		IGPlus_ABHaveMin = false;
+		IGPlus_ABMeasureStart = Level.TimeSeconds;
+		IGPlus_ABPeak = 0.0;
+		IGPlus_ABTickMaxTS = TimeStamp;
+		IGPlus_ABLastArrival = Level.TimeSeconds;
+		IGPlus_ABLastArrivalTS = TimeStamp;
+		IGPlus_ABNewestTS = TimeStamp;
 		return;
 	}
 
-	IGPlus_JCTickMaxTS = FMax(IGPlus_JCTickMaxTS, TimeStamp);
-	IGPlus_JCLastArrival = Level.TimeSeconds;
-	IGPlus_JCLastArrivalTS = FMax(IGPlus_JCLastArrivalTS, TimeStamp);
-	IGPlus_JCNewestTS = FMax(IGPlus_JCNewestTS, TimeStamp);
-	if (IGPlus_JCMoveLen <= 0.0)
-		IGPlus_JCMoveLen = FMin(MoveLen, 0.1);
+	IGPlus_ABTickMaxTS = FMax(IGPlus_ABTickMaxTS, TimeStamp);
+	IGPlus_ABLastArrival = Level.TimeSeconds;
+	IGPlus_ABLastArrivalTS = FMax(IGPlus_ABLastArrivalTS, TimeStamp);
+	IGPlus_ABNewestTS = FMax(IGPlus_ABNewestTS, TimeStamp);
+	if (IGPlus_ABMoveLen <= 0.0)
+		IGPlus_ABMoveLen = FMin(MoveLen, 0.1);
 	else
-		IGPlus_JCMoveLen += (FMin(MoveLen, 0.1) - IGPlus_JCMoveLen) * 0.05;
+		IGPlus_ABMoveLen += (FMin(MoveLen, 0.1) - IGPlus_ABMoveLen) * 0.05;
 	// A new measure counts once its window is full: a join or a freeze
 	// leaves stray arrival times behind, which read as lateness.
-	if (Level.TimeSeconds - IGPlus_JCMeasureStart < IGPLUS_JC_WARMUP)
+	if (Level.TimeSeconds - IGPlus_ABMeasureStart < IGPLUS_AB_WARMUP)
 		return;
 
-	Tick = FMax(IGPlus_JCTickLen, 0.001);
-	Late = FMax(0.0, IGPlus_JCBase() - TimeStamp);
-	IGPlus_JCNoteArrival(Late, Gap, MoveLen, Tick);
-	IGPlus_JCPeak = FMax(IGPlus_JCPeak, FMin(Late, 0.25));
+	Tick = FMax(IGPlus_ABTickLen, 0.001);
+	Late = FMax(0.0, IGPlus_ABBase() - TimeStamp);
+	IGPlus_ABNoteArrival(Late, Gap, MoveLen, Tick);
+	IGPlus_ABPeak = FMax(IGPlus_ABPeak, FMin(Late, 0.25));
 
-	if (IGPlus_JCActive() == false) {
-		if (IGPlus_JCQueued)
-			IGPlus_JCLeave("off");
+	if (IGPlus_ABActive() == false) {
+		if (IGPlus_ABQueued)
+			IGPlus_ABLeave("off");
 		return;
 	}
-	if (IGPlus_JCQueued == false) {
+	if (IGPlus_ABQueued == false) {
 		// On time: this move runs now, through the code as before.
 		if (ServerTimeStamp <= 0.0
-			|| Late <= IGPLUS_JC_ENTER_FRAMES * IGPlus_JCMoveLen + IGPLUS_JC_ENTER_TICKS * Tick)
+			|| Late <= IGPLUS_AB_ENTER_FRAMES * IGPlus_ABMoveLen + IGPLUS_AB_ENTER_TICKS * Tick)
 			return;
 		// Late: from here this player's moves are queued. The delay is how
 		// late this move came. After a stall the player stood still that
@@ -6336,29 +6492,29 @@ function IGPlus_JCIntercept(
 		// tick and the ones behind it at their own pace. A late move that
 		// newer ones overtook is lost as before, and the player stands
 		// still once, for the delay, so that the next one like it is not.
-		IGPlus_JCQueued = true;
-		IGPlus_JCHeld = false;
-		IGPlus_JCDelay = FMin(Late, IGPlus_JCMaxDelay());
+		IGPlus_ABQueued = true;
+		IGPlus_ABHeld = false;
+		IGPlus_ABDelay = FMin(Late, IGPlus_ABMaxDelay());
 		// (Overtaken: the clock starts that far behind the moves that ran
 		// already, so nothing runs for about the delay. Held from now.)
 		if (TimeStamp <= CurrentTimeStamp)
-			IGPlus_JCHold();
-		IGPlus_JCClockTime = Level.TimeSeconds;
-		IGPlus_JCLastRun = ServerTimeStamp;
-		IGPlus_JCOverNow = 0.0;
-		IGPlus_JCEnterTime = Level.TimeSeconds;
-		IGPlus_JCStatEnters++;
-		IGPlus_JCSetDelayMs();
-		IGPlus_JCLog("queued lateMs="$int(1000.0 * Late / Level.TimeDilation)
-			@"slackMs="$int(1000.0 * (IGPLUS_JC_ENTER_FRAMES * IGPlus_JCMoveLen + IGPLUS_JC_ENTER_TICKS * Tick) / Level.TimeDilation));
-	} else if (TimeStamp <= CurrentTimeStamp && Late > IGPlus_JCDelay) {
+			IGPlus_ABHold();
+		IGPlus_ABClockTime = Level.TimeSeconds;
+		IGPlus_ABLastRun = ServerTimeStamp;
+		IGPlus_ABOverNow = 0.0;
+		IGPlus_ABEnterTime = Level.TimeSeconds;
+		IGPlus_ABStatEnters++;
+		IGPlus_ABSetDelayMs();
+		IGPlus_ABLog("queued lateMs="$int(1000.0 * Late / Level.TimeDilation)
+			@"slackMs="$int(1000.0 * (IGPLUS_AB_ENTER_FRAMES * IGPlus_ABMoveLen + IGPLUS_AB_ENTER_TICKS * Tick) / Level.TimeDilation));
+	} else if (TimeStamp <= CurrentTimeStamp && Late > IGPlus_ABDelay) {
 		// Too late even for the queue: newer moves ran over its time. The
 		// delay grows to this lateness, so the next move this late is in
 		// time. The player stands still for the difference, as in a stall,
 		// and is held from now when that is longer than moves are apart.
-		if (FMin(Late, IGPlus_JCMaxDelay()) - IGPlus_JCDelay > IGPLUS_JC_GRACE * IGPlus_JCMoveLen)
-			IGPlus_JCHold();
-		IGPlus_JCDelay = FMin(Late, IGPlus_JCMaxDelay());
+		if (FMin(Late, IGPlus_ABMaxDelay()) - IGPlus_ABDelay > IGPLUS_AB_GRACE * IGPlus_ABMoveLen)
+			IGPlus_ABHold();
+		IGPlus_ABDelay = FMin(Late, IGPlus_ABMaxDelay());
 	}
 	// Already run or passed (out of order, twice): rejected as before.
 	if (TimeStamp <= CurrentTimeStamp)
@@ -6367,8 +6523,8 @@ function IGPlus_JCIntercept(
 	// The fire clock check measures at arrival (not when the move runs).
 	IGPlus_DetUpdateFireClockLead(TimeStamp, Gap);
 
-	if (IGPlus_JCCount >= IGPLUS_JC_MAXQUEUE)
-		IGPlus_JCRunHead();
+	if (IGPlus_ABCount >= IGPLUS_AB_MAXQUEUE)
+		IGPlus_ABRunHead();
 
 	SM = IGPlus_CreateServerMove();
 	SM.TimeStamp = TimeStamp;
@@ -6390,42 +6546,42 @@ function IGPlus_JCIntercept(
 	SM.PRTData = PRTData;
 
 	// Oldest first: packets can arrive out of order.
-	if (IGPlus_JCHead == none || TimeStamp < IGPlus_JCHead.TimeStamp) {
-		SM.Next = IGPlus_JCHead;
-		IGPlus_JCHead = SM;
+	if (IGPlus_ABHead == none || TimeStamp < IGPlus_ABHead.TimeStamp) {
+		SM.Next = IGPlus_ABHead;
+		IGPlus_ABHead = SM;
 	} else {
 		// ponytail: walks the queue (a few dozen moves at most). A tail
 		// pointer if queues ever get long.
-		Prev = IGPlus_JCHead;
+		Prev = IGPlus_ABHead;
 		while (Prev.Next != none && Prev.Next.TimeStamp <= TimeStamp)
 			Prev = Prev.Next;
 		if (Prev.TimeStamp == TimeStamp) {
 			// The same move twice.
 			IGPlus_DestroyServerMove(SM);
-			IGPlus_JCKept = true;
+			IGPlus_ABKept = true;
 			return;
 		}
 		SM.Next = Prev.Next;
 		Prev.Next = SM;
 	}
-	IGPlus_JCCount++;
-	IGPlus_JCStatQueuedMoves++;
-	IGPlus_JCKept = true;
+	IGPlus_ABCount++;
+	IGPlus_ABStatQueuedMoves++;
+	IGPlus_ABKept = true;
 }
 
 // Server: run the oldest queued move, as if it arrived now.
-function IGPlus_JCRunHead() {
+function IGPlus_ABRunHead() {
 	local IGPlus_ServerMove SM;
 
-	SM = IGPlus_JCHead;
+	SM = IGPlus_ABHead;
 	if (SM == none)
 		return;
-	IGPlus_JCHead = SM.Next;
+	IGPlus_ABHead = SM.Next;
 	SM.Next = none;
-	IGPlus_JCCount--;
-	IGPlus_JCHeld = false;
-	IGPlus_JCLastRun = Level.TimeSeconds;
-	IGPlus_JCPlaying = true;
+	IGPlus_ABCount--;
+	IGPlus_ABHeld = false;
+	IGPlus_ABLastRun = Level.TimeSeconds;
+	IGPlus_ABPlaying = true;
 	xxServerMove(
 		SM.TimeStamp,
 		SM.RawDelta,
@@ -6443,94 +6599,94 @@ function IGPlus_JCRunHead() {
 		SM.DetRedoTS,
 		SM.DetRedoData,
 		SM.PRTData);
-	IGPlus_JCPlaying = false;
+	IGPlus_ABPlaying = false;
 	IGPlus_DestroyServerMove(SM);
 }
 
 // Server: this player's moves run on arrival again. What is still queued
 // runs now.
-function IGPlus_JCLeave(string Why) {
-	while (IGPlus_JCHead != none && bDeleteMe == false)
-		IGPlus_JCRunHead();
-	IGPlus_JCQueued = false;
-	IGPlus_JCHeld = false;
-	IGPlus_JCDelay = 0.0;
-	IGPlus_JCSetDelayMs();
-	IGPlus_JCLog("unqueued reason="$Why@"queuedSec="$IGPlus_JCFmt((Level.TimeSeconds - IGPlus_JCEnterTime) / Level.TimeDilation));
+function IGPlus_ABLeave(string Why) {
+	while (IGPlus_ABHead != none && bDeleteMe == false)
+		IGPlus_ABRunHead();
+	IGPlus_ABQueued = false;
+	IGPlus_ABHeld = false;
+	IGPlus_ABDelay = 0.0;
+	IGPlus_ABSetDelayMs();
+	IGPlus_ABLog("unqueued reason="$Why@"queuedSec="$IGPlus_ABFmt((Level.TimeSeconds - IGPlus_ABEnterTime) / Level.TimeDilation));
 }
 
-function IGPlus_JCDropQueue() {
+function IGPlus_ABDropQueue() {
 	local IGPlus_ServerMove SM;
 
-	while (IGPlus_JCHead != none) {
-		SM = IGPlus_JCHead;
-		IGPlus_JCHead = SM.Next;
+	while (IGPlus_ABHead != none) {
+		SM = IGPlus_ABHead;
+		IGPlus_ABHead = SM.Next;
 		SM.Destroy();
 	}
-	IGPlus_JCCount = 0;
+	IGPlus_ABCount = 0;
 }
 
 // Server, once a tick for a queued player, after this tick's moves arrived
 // (CheckClientError): advance the playout clock and run the moves it reached.
-function IGPlus_JCPlayout() {
+function IGPlus_ABPlayout() {
 	local float dt, MaxDelay, Target, Clock, Limit;
 	local bool bStopped;
 
-	if (IGPlus_JCQueued == false)
+	if (IGPlus_ABQueued == false)
 		return;
-	if (IGPlus_JCActive() == false || Level.Pauser != "") {
-		IGPlus_JCLeave("off");
+	if (IGPlus_ABActive() == false || Level.Pauser != "") {
+		IGPlus_ABLeave("off");
 		return;
 	}
 	// Nothing for 2 seconds: the arrival measure starts over with the next
-	// move anyway (IGPlus_JCIntercept).
-	if (Level.TimeSeconds - IGPlus_JCLastArrival > 2.0) {
+	// move anyway (IGPlus_ABIntercept).
+	if (Level.TimeSeconds - IGPlus_ABLastArrival > 2.0) {
 		// (Nothing ran at once after all: not time above the cap.)
-		IGPlus_JCStatOverCap = FMax(0.0, IGPlus_JCStatOverCap - IGPlus_JCOverNow);
-		IGPlus_JCLeave("silent");
+		IGPlus_ABStatOverCap = FMax(0.0, IGPlus_ABStatOverCap - IGPlus_ABOverNow);
+		IGPlus_ABLeave("silent");
 		return;
 	}
-	dt = FMax(0.0, Level.TimeSeconds - IGPlus_JCClockTime);
-	IGPlus_JCClockTime = Level.TimeSeconds;
-	MaxDelay = IGPlus_JCMaxDelay();
+	dt = FMax(0.0, Level.TimeSeconds - IGPlus_ABClockTime);
+	IGPlus_ABClockTime = Level.TimeSeconds;
+	MaxDelay = IGPlus_ABMaxDelay();
 
 	// The delay to keep is the player's usual lateness. Lateness within the
 	// leave slack is a connection that arrives on time: no delay to keep.
 	Target = 0.0;
-	if (IGPlus_JCPeak > IGPLUS_JC_LEAVE_FRAMES * IGPlus_JCMoveLen + IGPLUS_JC_LEAVE_TICKS * IGPlus_JCTickLen)
-		Target = FMin(IGPlus_JCPeak, MaxDelay);
+	if (IGPlus_ABPeak > IGPLUS_AB_LEAVE_FRAMES * IGPlus_ABMoveLen + IGPLUS_AB_LEAVE_TICKS * IGPlus_ABTickLen)
+		Target = FMin(IGPlus_ABPeak, MaxDelay);
 
 	// More delay than that: the clock runs up to 5% fast. The delay is time
 	// the clock stood still before (or packets that began to arrive sooner,
 	// a ping drop), so this never runs more of the player's time than
 	// server time has passed. TimeMargin still checks every move as it runs.
-	if (IGPlus_JCDelay > Target)
-		IGPlus_JCDelay -= FMin(IGPLUS_JC_DRAIN * dt, IGPlus_JCDelay - Target);
+	if (IGPlus_ABDelay > Target)
+		IGPlus_ABDelay -= FMin(IGPLUS_AB_DRAIN * dt, IGPlus_ABDelay - Target);
 
 	// The next move is late: the clock stops and the player stands still.
 	// The time it stands is delay from here on, so play goes on from this
 	// spot at normal pace when moves arrive.
-	Clock = IGPlus_JCBase() - IGPlus_JCDelay;
-	Limit = IGPlus_JCNewestTS + IGPLUS_JC_GRACE * IGPlus_JCMoveLen;
+	Clock = IGPlus_ABBase() - IGPlus_ABDelay;
+	Limit = IGPlus_ABNewestTS + IGPLUS_AB_GRACE * IGPlus_ABMoveLen;
 	if (Clock > Limit) {
-		IGPlus_JCDelay += Clock - Limit;
+		IGPlus_ABDelay += Clock - Limit;
 		bStopped = true;
 	}
 	// Time above the cap runs at once, as without the queue. (Counted once
 	// for a stall: the delay is cut back to the cap every tick of it.)
-	if (IGPlus_JCDelay > MaxDelay) {
-		IGPlus_JCStatOverCap += FMax(0.0, IGPlus_JCDelay - MaxDelay - IGPlus_JCOverNow);
-		IGPlus_JCOverNow = FMax(IGPlus_JCOverNow, IGPlus_JCDelay - MaxDelay);
-		IGPlus_JCDelay = MaxDelay;
+	if (IGPlus_ABDelay > MaxDelay) {
+		IGPlus_ABStatOverCap += FMax(0.0, IGPlus_ABDelay - MaxDelay - IGPlus_ABOverNow);
+		IGPlus_ABOverNow = FMax(IGPlus_ABOverNow, IGPlus_ABDelay - MaxDelay);
+		IGPlus_ABDelay = MaxDelay;
 	} else {
-		IGPlus_JCOverNow = 0.0;
+		IGPlus_ABOverNow = 0.0;
 	}
-	IGPlus_JCSetDelayMs();
-	IGPlus_JCStatDelayMax = FMax(IGPlus_JCStatDelayMax, float(IGPlus_JCDelayMs));
+	IGPlus_ABSetDelayMs();
+	IGPlus_ABStatDelayMax = FMax(IGPlus_ABStatDelayMax, float(IGPlus_ABDelayMs));
 
-	Clock = IGPlus_JCBase() - IGPlus_JCDelay;
-	while (IGPlus_JCHead != none && IGPlus_JCHead.TimeStamp <= Clock && bDeleteMe == false)
-		IGPlus_JCRunHead();
+	Clock = IGPlus_ABBase() - IGPlus_ABDelay;
+	while (IGPlus_ABHead != none && IGPlus_ABHead.TimeStamp <= Clock && bDeleteMe == false)
+		IGPlus_ABRunHead();
 
 	// The player stands still on the server from here: the other clients
 	// hold them too, until a move runs. The queue lets us see it coming.
@@ -6539,75 +6695,222 @@ function IGPlus_JCPlayout() {
 	// so the hold reaches the others with the last real position and they
 	// never move the player past it. If the next move comes a moment later
 	// after all, they showed a stop of one tick.
-	if (IGPlus_JCHead == none
-		&& (bStopped || Level.TimeSeconds - IGPlus_JCLastArrival > IGPLUS_JC_GRACE * IGPlus_JCMoveLen))
-		IGPlus_JCHold();
+	if (IGPlus_ABHead == none
+		&& (bStopped || Level.TimeSeconds - IGPlus_ABLastArrival > IGPLUS_AB_GRACE * IGPlus_ABMoveLen))
+		IGPlus_ABHold();
 	// Whatever else kept moves from running for longer than they are apart.
-	else if (Level.TimeSeconds - IGPlus_JCLastRun > IGPLUS_JC_GRACE * IGPlus_JCMoveLen + IGPlus_JCTickLen)
-		IGPlus_JCHold();
+	else if (Level.TimeSeconds - IGPlus_ABLastRun > IGPLUS_AB_GRACE * IGPlus_ABMoveLen + IGPlus_ABTickLen)
+		IGPlus_ABHold();
 
 	// On time again and the delay made up: back to running on arrival.
-	if (Target <= 0.0 && IGPlus_JCHeld == false
-		&& IGPlus_JCDelay <= IGPLUS_JC_LEAVE_DELAY_TICKS * IGPlus_JCTickLen)
-		IGPlus_JCLeave("on-time");
+	if (Target <= 0.0 && IGPlus_ABHeld == false
+		&& IGPlus_ABDelay <= IGPLUS_AB_LEAVE_DELAY_TICKS * IGPlus_ABTickLen)
+		IGPlus_ABLeave("on-time");
 }
 
 // The engine (469) calls this for every connection right after it took in
 // this tick's packets. Stock uses it for its own ServerMove, which we replace.
 event CheckClientError() {
-	IGPlus_JCPlayout();
+	// The tick's packets are all read: the shots that waited run now, in
+	// the order they were fired. Again after the playout, which can run a
+	// queued player's shot.
+	if (zzUTPure != None) {
+		zzUTPure.IGPlus_bShotOrderReady = true;
+		zzUTPure.IGPlus_FlushShots();
+	}
+	IGPlus_ABPlayout();
+	if (zzUTPure != None)
+		zzUTPure.IGPlus_FlushShots();
+}
+
+// Is the shot that arrived later run first? Only when it was fired earlier
+// by more than the margin. Closer together than that, our estimate can't
+// tell them apart, and the order they arrived in stays.
+static function bool IGPlus_ShotRunsFirst(float AgoArrivedLater, float AgoArrivedFirst, float Margin) {
+	return AgoArrivedLater > AgoArrivedFirst + Margin;
+}
+
+// Server: how long before now the shot of the move stamped StepTS was fired.
+// The move's stamp is the client's clock. The arrival measure of Adaptive
+// Buffering maps it to ours (it runs with the setting off too): Late is
+// how far behind the best case this move arrived. The best case still has
+// the upload on top, half of our own ping measure, the lowest of the last 2
+// seconds. A client can't make that ping lower, and delaying its packets
+// only makes its shots look later.
+function float IGPlus_ShotAgo(float StepTS) {
+	local float Late, PingMs;
+	local int i;
+
+	if (IGPlus_ABMeasureStart > 0.0 && Level.TimeSeconds - IGPlus_ABMeasureStart >= IGPLUS_AB_WARMUP)
+		Late = FClamp(IGPlus_ABBase() - StepTS, 0.0, 0.25);
+	for (i = 0; i < arraycount(IGPlus_PingRing); i++)
+		if (IGPlus_PingRing[i] > 0.0 && (PingMs == 0.0 || IGPlus_PingRing[i] < PingMs))
+			PingMs = IGPlus_PingRing[i];
+	if (PingMs == 0.0 && PlayerReplicationInfo != None)
+		PingMs = PlayerReplicationInfo.Ping;
+	return Late + 0.0005 * PingMs * Level.TimeDilation;
+}
+
+// Server: a rifle or sniper shot waits for the end of the tick's packets.
+// False: it can't wait, the weapon traces it now.
+function bool IGPlus_QueueShot(Weapon W, rotator View, vector Loc) {
+	if (zzUTPure == None || zzUTPure.IGPlus_bShotOrderReady == false)
+		return false;
+	// Fire Time Order off: the shot runs now, in the order its packet arrived.
+	if (zzUTPure.Settings == None || zzUTPure.Settings.bEnableFireTimeOrder == false)
+		return false;
+	// One at a time: a second shot of ours runs the first one now.
+	if (IGPlus_bShotPending)
+		IGPlus_RunPendingShot();
+	if (zzUTPure.IGPlus_QueueShooter(self) == false)
+		return false;
+	IGPlus_bShotPending = true;
+	IGPlus_PendShotWeapon = W;
+	IGPlus_PendShotView = View;
+	IGPlus_PendShotLoc = Loc;
+	IGPlus_PendShotAgo = IGPlus_ShotAgo(IGPlus_DetLastShotTS);
+	IGPlus_PendPRTNoteTS = IGPlus_PRTNoteTS;
+	IGPlus_PendPRTNoteTick = IGPlus_PRTNoteTick;
+	IGPlus_PendPRTSeenTime = IGPlus_PRTSeenTime;
+	IGPlus_PendPRTViewTime = IGPlus_PRTViewTime;
+	IGPlus_PendPRTLagMs = IGPlus_PRTLagMs;
+	IGPlus_PendPRTReason = IGPlus_PRTReason;
+	IGPlus_bPendPRTInterp = IGPlus_bPRTInterp;
+	IGPlus_bPendPRTInterpPast = IGPlus_bPRTInterpPast;
+	IGPlus_bPendPRTInterpHeld = IGPlus_bPRTInterpHeld;
+	IGPlus_PendPRTInterpR = IGPlus_PRTInterpR;
+	IGPlus_PendVerdict = IGPlus_ClientHitVerdict;
+	IGPlus_bPendDrawnDiffers = IGPlus_bShotDrawnDiffers;
+	IGPlus_PendEyeByte = IGPlus_ShotEyeByte;
+	return true;
+}
+
+// Server: trace the shot that waited, with what its own move brought (a later
+// move of ours in the same tick has replaced those values by now).
+function IGPlus_RunPendingShot() {
+	local Weapon W;
+	local float NoteTS, SeenTime, ViewTime, LagMs;
+	local int NoteTick, Verdict, EyeByte;
+	local string Reason;
+	local bool bDrawnDiffers, bInterp, bInterpPast, bInterpHeld;
+	local float InterpR;
+
+	if (IGPlus_bShotPending == false)
+		return;
+	IGPlus_bShotPending = false;
+	W = IGPlus_PendShotWeapon;
+	IGPlus_PendShotWeapon = None;
+	if (W == None || W.bDeleteMe || W.Owner != self)
+		return;
+	// A shot fired before ours in this tick killed us: ours is a shot from
+	// the dead, as if its move had arrived a tick later.
+	if ((Health <= 0 || IsInState('Dying')) && IGPlus_DetTradesEnabled() == false) {
+		IGPlus_HitStatDeadShots++;
+		if (IGPlus_PendVerdict == IGPLUS_HIT_BODY || IGPlus_PendVerdict == IGPLUS_HIT_HEAD)
+			IGPlus_HitStatDeadHits++;
+		IGPlus_EventLog("[DET-HIT]"@PlayerReplicationInfo.PlayerName@"deadShot clientHit="$(IGPlus_PendVerdict == IGPLUS_HIT_BODY || IGPlus_PendVerdict == IGPLUS_HIT_HEAD)
+			@"sameTick=True trades=False ping="$PlayerReplicationInfo.Ping);
+		return;
+	}
+
+	NoteTS = IGPlus_PRTNoteTS;
+	NoteTick = IGPlus_PRTNoteTick;
+	SeenTime = IGPlus_PRTSeenTime;
+	ViewTime = IGPlus_PRTViewTime;
+	LagMs = IGPlus_PRTLagMs;
+	Reason = IGPlus_PRTReason;
+	bInterp = IGPlus_bPRTInterp;
+	bInterpPast = IGPlus_bPRTInterpPast;
+	bInterpHeld = IGPlus_bPRTInterpHeld;
+	InterpR = IGPlus_PRTInterpR;
+	Verdict = IGPlus_ClientHitVerdict;
+	bDrawnDiffers = IGPlus_bShotDrawnDiffers;
+	EyeByte = IGPlus_ShotEyeByte;
+
+	IGPlus_PRTNoteTS = IGPlus_PendPRTNoteTS;
+	IGPlus_PRTNoteTick = IGPlus_PendPRTNoteTick;
+	IGPlus_PRTSeenTime = IGPlus_PendPRTSeenTime;
+	IGPlus_PRTViewTime = IGPlus_PendPRTViewTime;
+	IGPlus_PRTLagMs = IGPlus_PendPRTLagMs;
+	IGPlus_PRTReason = IGPlus_PendPRTReason;
+	IGPlus_bPRTInterp = IGPlus_bPendPRTInterp;
+	IGPlus_bPRTInterpPast = IGPlus_bPendPRTInterpPast;
+	IGPlus_bPRTInterpHeld = IGPlus_bPendPRTInterpHeld;
+	IGPlus_PRTInterpR = IGPlus_PendPRTInterpR;
+	IGPlus_ClientHitVerdict = IGPlus_PendVerdict;
+	IGPlus_bShotDrawnDiffers = IGPlus_bPendDrawnDiffers;
+	IGPlus_ShotEyeByte = IGPlus_PendEyeByte;
+
+	if (ST_SuperShockRifle(W) != None)
+		ST_SuperShockRifle(W).DeterministicTraceFire(IGPlus_PendShotView, IGPlus_PendShotLoc);
+	else if (ST_SniperRifle(W) != None)
+		ST_SniperRifle(W).DeterministicTraceFire(IGPlus_PendShotView, IGPlus_PendShotLoc);
+
+	IGPlus_PRTNoteTS = NoteTS;
+	IGPlus_PRTNoteTick = NoteTick;
+	IGPlus_PRTSeenTime = SeenTime;
+	IGPlus_PRTViewTime = ViewTime;
+	IGPlus_PRTLagMs = LagMs;
+	IGPlus_PRTReason = Reason;
+	IGPlus_bPRTInterp = bInterp;
+	IGPlus_bPRTInterpPast = bInterpPast;
+	IGPlus_bPRTInterpHeld = bInterpHeld;
+	IGPlus_PRTInterpR = InterpR;
+	IGPlus_ClientHitVerdict = Verdict;
+	IGPlus_bShotDrawnDiffers = bDrawnDiffers;
+	IGPlus_ShotEyeByte = EyeByte;
 }
 
 // Server, every tick (ServerTick), for every player.
-function IGPlus_JCTick(float DeltaTime) {
+function IGPlus_ABTick(float DeltaTime) {
 	local float Off, Old;
 
-	if (IGPlus_JCTickLen <= 0.0)
-		IGPlus_JCTickLen = DeltaTime;
+	if (IGPlus_ABTickLen <= 0.0)
+		IGPlus_ABTickLen = DeltaTime;
 	else
-		IGPlus_JCTickLen += (DeltaTime - IGPlus_JCTickLen) * 0.02;
+		IGPlus_ABTickLen += (DeltaTime - IGPlus_ABTickLen) * 0.02;
 
 	// The client's clock seen from here: the lowest (arrival - timestamp) of
 	// the last 3 to 4 seconds. Taken here, where Level.TimeSeconds is the
 	// time this tick's packets were taken in.
-	if (IGPlus_JCTickMaxTS > 0.0) {
-		Off = Level.TimeSeconds - IGPlus_JCTickMaxTS;
-		IGPlus_JCTickMaxTS = 0.0;
-		Old = IGPlus_JCWinMin;
-		if (IGPlus_JCHaveMin == false) {
-			IGPlus_JCMinCur = Off;
-			IGPlus_JCMinPrev[0] = Off;
-			IGPlus_JCMinPrev[1] = Off;
-			IGPlus_JCMinPrev[2] = Off;
-			IGPlus_JCMinBucketEnd = Level.TimeSeconds + 1.0;
-			IGPlus_JCHaveMin = true;
+	if (IGPlus_ABTickMaxTS > 0.0) {
+		Off = Level.TimeSeconds - IGPlus_ABTickMaxTS;
+		IGPlus_ABTickMaxTS = 0.0;
+		Old = IGPlus_ABWinMin;
+		if (IGPlus_ABHaveMin == false) {
+			IGPlus_ABMinCur = Off;
+			IGPlus_ABMinPrev[0] = Off;
+			IGPlus_ABMinPrev[1] = Off;
+			IGPlus_ABMinPrev[2] = Off;
+			IGPlus_ABMinBucketEnd = Level.TimeSeconds + 1.0;
+			IGPlus_ABHaveMin = true;
 			Old = Off;
-		} else if (Level.TimeSeconds >= IGPlus_JCMinBucketEnd) {
-			IGPlus_JCMinPrev[2] = IGPlus_JCMinPrev[1];
-			IGPlus_JCMinPrev[1] = IGPlus_JCMinPrev[0];
-			IGPlus_JCMinPrev[0] = IGPlus_JCMinCur;
-			IGPlus_JCMinCur = Off;
-			IGPlus_JCMinBucketEnd = Level.TimeSeconds + 1.0;
+		} else if (Level.TimeSeconds >= IGPlus_ABMinBucketEnd) {
+			IGPlus_ABMinPrev[2] = IGPlus_ABMinPrev[1];
+			IGPlus_ABMinPrev[1] = IGPlus_ABMinPrev[0];
+			IGPlus_ABMinPrev[0] = IGPlus_ABMinCur;
+			IGPlus_ABMinCur = Off;
+			IGPlus_ABMinBucketEnd = Level.TimeSeconds + 1.0;
 		} else {
-			IGPlus_JCMinCur = FMin(IGPlus_JCMinCur, Off);
+			IGPlus_ABMinCur = FMin(IGPlus_ABMinCur, Off);
 		}
-		IGPlus_JCWinMin = FMin(FMin(IGPlus_JCMinCur, IGPlus_JCMinPrev[0]), FMin(IGPlus_JCMinPrev[1], IGPlus_JCMinPrev[2]));
+		IGPlus_ABWinMin = FMin(FMin(IGPlus_ABMinCur, IGPlus_ABMinPrev[0]), FMin(IGPlus_ABMinPrev[1], IGPlus_ABMinPrev[2]));
 		// The measure moved, the playout clock did not.
-		if (IGPlus_JCQueued)
-			IGPlus_JCDelay = FMax(0.0, IGPlus_JCDelay + Old - IGPlus_JCWinMin);
+		if (IGPlus_ABQueued)
+			IGPlus_ABDelay = FMax(0.0, IGPlus_ABDelay + Old - IGPlus_ABWinMin);
 	}
 
 	// The usual lateness forgets.
-	IGPlus_JCPeak -= IGPlus_JCPeak * FMin(1.0, DeltaTime / (IGPLUS_JC_PEAK_TIME * Level.TimeDilation));
+	IGPlus_ABPeak -= IGPlus_ABPeak * FMin(1.0, DeltaTime / (IGPLUS_AB_PEAK_TIME * Level.TimeDilation));
 
-	if (IGPlus_JCQueued)
-		IGPlus_JCStatQueuedTime += DeltaTime;
-	IGPlus_JCSetDelayMs();
+	if (IGPlus_ABQueued)
+		IGPlus_ABStatQueuedTime += DeltaTime;
+	IGPlus_ABSetDelayMs();
 
 	// The other clients hold us still while our clock stands still
 	// (IGPlus_ApplyWarpFix), and let go when a move ran.
-	if (IGPlus_WarpFixData.bHold != IGPlus_JCHeld) {
-		IGPlus_WarpFixData.bHold = IGPlus_JCHeld;
+	if (IGPlus_WarpFixData.bHold != IGPlus_ABHeld) {
+		IGPlus_WarpFixData.bHold = IGPlus_ABHeld;
 		IGPlus_WarpFixData.OldLocation = Location;
 		IGPlus_WarpFixData.Counter += 1;
 	}
@@ -6683,10 +6986,10 @@ function xxServerMove(
 ) {
 	local IGPlus_ServerMove SM;
 
-	// Jitter Compensation: a queued player's move waits for its turn.
-	IGPlus_JCIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
+	// Adaptive Buffering: a queued player's move waits for its turn.
+	IGPlus_ABIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
 		MiscData, MiscData2, View, ClientBase, OldMoveData1, OldMoveData2, DetRedoTS, DetRedoData, PRTData);
-	if (IGPlus_JCKept)
+	if (IGPlus_ABKept)
 		return;
 
 	SM = IGPlus_CreateServerMove();
@@ -6738,11 +7041,11 @@ function xxServerMoveDead(
 
 	zzKickReady = Max(zzKickReady - 1,0);
 
-	// Jitter Compensation: our client knows it is dead. The moves it made
+	// Adaptive Buffering: our client knows it is dead. The moves it made
 	// before that run now, ahead of this one. Not a gap in the arrivals.
-	if (IGPlus_JCQueued)
-		IGPlus_JCLeave("dead");
-	IGPlus_JCLastArrival = Level.TimeSeconds;
+	if (IGPlus_ABQueued)
+		IGPlus_ABLeave("dead");
+	IGPlus_ABLastArrival = Level.TimeSeconds;
 
 	if (TimeStamp > Level.TimeSeconds)
 		TimeStamp = Level.TimeSeconds;
@@ -7059,7 +7362,7 @@ simulated function IGPlus_PRTRulePlace(float ShownTime, int ShownTick, bool bWar
 	UpdateTime = IGPlus_LocationOffsetFix_ServerLocationTime;
 	UpdateTick = IGPlus_LocationOffsetFix_ServerLocationTick;
 	Lead = IGPlus_LocationOffsetFix_ServerLocationLead;
-	// Held still by Jitter Compensation in the last frame: the server stands
+	// Held still by Adaptive Buffering in the last frame: the server stands
 	// them at the spot that frame drew them at (UTPlusDummy.CompSwap). They
 	// are put there, since this frame's update may have moved them on already.
 	if (IGPlus_bPRTRuleHeld) {
@@ -7095,7 +7398,7 @@ simulated function IGPlus_PRTRulePlace(float ShownTime, int ShownTick, bool bWar
 
 // Client, on another player's pawn: stand it where our frame number Frame
 // drew it, for our own trace (Location Offset Fix off). A player held still
-// by Jitter Compensation was drawn at the held spot, so that is covered.
+// by Adaptive Buffering was drawn at the held spot, so that is covered.
 simulated function IGPlus_PRTPicturePlace(int Frame, float Lead) {
 	IGPlus_bPRTRulePlaced = false;
 	IGPlus_bPRTRuleDbgValid = false;
@@ -7139,7 +7442,7 @@ function bool IGPlus_PRTTraceUsable() {
 // Our own trace stands the others where the server will (IGPlus_PRTRulePlace).
 // That needs the record of each player's updates, which Location Offset Fix keeps.
 function bool IGPlus_PRTRuleUsable() {
-	return IGPlus_PRTTraceUsable() && Settings.bEnableLocationOffsetFix;
+	return IGPlus_PRTTraceUsable() && Settings.bEnableLocationOffsetFix && IGPlus_EnableTickInterp == false;
 }
 // With Location Offset Fix off there is no such record: the engine blends
 // each update into the pawn's spot (AActor::PostNetReceive moves a simulated
@@ -7148,8 +7451,10 @@ function bool IGPlus_PRTRuleUsable() {
 // (IGPlus_PRTPicturePlace). The engine carries a player on every frame, also
 // in the frame an update arrives, so in steady movement that picture is the
 // server's spot once the shot counts that frame (IGPlus_PRTShownLead).
+// Tick Interpolation uses it too: there the picture is a spot the server can
+// stand the player at exactly, from the tick position the shot reports.
 function bool IGPlus_PRTPictureUsable() {
-	return IGPlus_PRTTraceUsable() && Settings.bEnableLocationOffsetFix == false;
+	return IGPlus_PRTTraceUsable() && (Settings.bEnableLocationOffsetFix == false || IGPlus_EnableTickInterp);
 }
 
 function IGPlus_PRTRuleAll(bool bPlace, optional bool bPicture) {
@@ -7167,7 +7472,7 @@ function IGPlus_PRTRuleAll(bool bPlace, optional bool bPicture) {
 		if (bPlace == false)
 			P.IGPlus_PRTRuleUndo();
 		else if (bPicture)
-			P.IGPlus_PRTPicturePlace(IGPlus_FrameCount - 1, IGPlus_PRTShownLead);
+			P.IGPlus_PRTPicturePlace(IGPlus_FrameCount - 1, IGPlus_PRTShownLead * float(int(IGPlus_EnableTickInterp == false)));
 		else
 			P.IGPlus_PRTRulePlace(IGPlus_PRTShownTime, IGPlus_PRTShownTick,
 				IGPlus_EnableWarpFix, IGPlus_WarpFixDelay);
@@ -7267,6 +7572,12 @@ function IGPlus_ClientShotTraceDebug(Actor Other, Actor Drawn, bool bRule, vecto
 	else if (bRule)
 		S = S@"notPlaced";
 	S = S@"shownAge="$IGPlus_Fmt1(1000.0 * IGPlus_PRTShownAge)@"shownTick="$(IGPlus_PRTShownTick & 0x7FFF);
+	// Tick Interpolation: the tick position that player was drawn at, whether
+	// that was past their newest update, that update's tick, and their delay.
+	if (IGPlus_EnableTickInterp)
+		S = S@"shownR="$Best.IGPlus_ShownR@"past="$Best.IGPlus_bShownPast@"held="$Best.IGPlus_bShownHeld@"duck="$Best.IGPlus_ShownDuck
+			@"newTick="$Best.IGPlus_TI_Tick[(Best.IGPlus_TI_Head - 1) & 15]@"delay="$IGPlus_Fmt1(Best.IGPlus_TI_Delay)
+			@"tickMs="$IGPlus_Fmt1(1000.0 * IGPlus_TI_TickLen);
 	ClientDebugMessage("Own trace:"@S);
 }
 
@@ -7294,23 +7605,24 @@ function Actor IGPlus_ClientShotTraceOnce(
 // Where the two differ on whether a player was hit, IGPlus_bShotDrawnDiffers
 // says so and the server counts it (hitDrawnDiff).
 // Client, with the others standing where IGPlus_PRTRulePlace put them: the
-// lead of the player this shot is at (the one it hit, or else the one it
-// passed closest, within 100 units). The shot's move adds it to the age it
+// player this shot is at (the one it hit, or else the one it passed
+// closest, within 100 units). The shot's move adds that player's lead to the age it
 // reports, so the server carries that player on by the frame the engine had
 // moved them already. The server carries every player by the one reported
 // age, so only the shot's own target is exact (rig test, Nov 13 2026: with
 // no lead the server stood a target who was changing speed one client frame
-// of movement behind the spot our trace used, about 10 ms).
-function float IGPlus_PRTShotTargetLead(Actor Other, vector Start, vector Dir) {
+// of movement behind the spot our trace used, about 10 ms). With Tick
+// Interpolation the shot reports the tick position that player was drawn at.
+function bbPlayer IGPlus_PRTShotTarget(Actor Other, vector Start, vector Dir) {
 	local int i;
 	local PlayerReplicationInfo PRI;
 	local bbPlayer P, Best;
 	local float Gap, BestGap;
 
 	if (bbPlayer(Other) != None && bbPlayer(Other).IGPlus_bPRTRulePlaced)
-		return bbPlayer(Other).IGPlus_PRTRuleDbgLead;
+		return bbPlayer(Other);
 	if (GameReplicationInfo == None)
-		return 0.0;
+		return None;
 	BestGap = 100.0;
 	for (i = 0; i < arraycount(GameReplicationInfo.PRIArray); ++i) {
 		PRI = GameReplicationInfo.PRIArray[i];
@@ -7323,9 +7635,7 @@ function float IGPlus_PRTShotTargetLead(Actor Other, vector Start, vector Dir) {
 			BestGap = Gap;
 		}
 	}
-	if (Best != None)
-		return Best.IGPlus_PRTRuleDbgLead;
-	return 0.0;
+	return Best;
 }
 
 function Actor IGPlus_ClientShotTrace(
@@ -7335,8 +7645,10 @@ function Actor IGPlus_ClientShotTrace(
 	local Actor Other, Drawn;
 	local vector DrawnLoc, DrawnNormal;
 	local bool bRule, bPicture;
+	local bbPlayer ShotTarget;
 
 	IGPlus_bShotDrawnDiffers = false;
+	IGPlus_PRTShotR = 0.0;
 	IGPlus_bShotHead = false;
 	bRule = IGPlus_PRTRuleUsable();
 	bPicture = bRule == false && IGPlus_PRTPictureUsable();
@@ -7360,12 +7672,24 @@ function Actor IGPlus_ClientShotTrace(
 	}
 	IGPlus_PRTShotLead = 0.0;
 	if (bRule) {
-		IGPlus_PRTShotLead = IGPlus_PRTShotTargetLead(Other, StartTrace, Normal(EndTrace - StartTrace));
+		ShotTarget = IGPlus_PRTShotTarget(Other, StartTrace, Normal(EndTrace - StartTrace));
+		if (ShotTarget != None)
+			IGPlus_PRTShotLead = ShotTarget.IGPlus_PRTRuleDbgLead;
 		IGPlus_PRTRuleAll(false);
 		IGPlus_bShotDrawnDiffers = (Pawn(Drawn) != None) != (Pawn(Other) != None);
 	} else if (bPicture) {
-		// The same frame for every player: the engine moves them all on.
-		IGPlus_PRTShotLead = IGPlus_PRTShownLead;
+		if (IGPlus_EnableTickInterp) {
+			// The tick position the shot's target was drawn at.
+			ShotTarget = IGPlus_PRTShotTarget(Other, StartTrace, Normal(EndTrace - StartTrace));
+			if (ShotTarget != None) {
+				IGPlus_PRTShotR = ShotTarget.IGPlus_ShownR;
+				IGPlus_bPRTShotPast = ShotTarget.IGPlus_bShownPast;
+				IGPlus_bPRTShotHeld = ShotTarget.IGPlus_bShownHeld;
+			}
+		} else {
+			// The same frame for every player: the engine moves them all on.
+			IGPlus_PRTShotLead = IGPlus_PRTShownLead;
+		}
 		IGPlus_PRTRuleAll(false);
 		Drawn = Other;
 	}
@@ -7524,6 +7848,10 @@ function IGPlus_HitCompare(Actor Other, bool bHead, vector Start, vector Dir, ve
 			S = S@"srvAge="$IGPlus_Fmt1(1000.0 * (IGPlus_PRTViewTimeNow() - IGPlus_PRTSeenTime));
 			if (D != None)
 				S = S@"srvGap="$IGPlus_Fmt1(1000.0 * D.CompGap)@"srvCarry="$IGPlus_Fmt1(1000.0 * D.CompCarry);
+			// Tick Interpolation: the tick position we read from the report,
+			// and the ticks of the two snapshots we stood that player between.
+			if (D != None && IGPlus_bPRTInterp)
+				S = S@"srvR="$IGPlus_PRTInterpR@"srvPast="$IGPlus_bPRTInterpPast@"srvHeld="$IGPlus_bPRTInterpHeld@"srvTicks="$D.CompTickA$"-"$D.CompTickB;
 		}
 	}
 	WB = IGPlus_GetWeaponImplementationBase();
@@ -7682,14 +8010,14 @@ function bool IGPlus_PointInsideCylinder(
 
 // Client: how far ahead of the server's copy we draw our own projectile, in
 // game seconds: the way back from the server, half our ping. Our ping value
-// also holds our Jitter Compensation delay (the server acknowledges a move
+// also holds our Adaptive Buffering delay (the server acknowledges a move
 // when it runs it). That delay all lies on the way there, so it is taken out.
 static function float IGPlus_OwnProjLead(PlayerPawn P) {
 	local int Ms;
 
 	Ms = P.PlayerReplicationInfo.Ping;
 	if (bbPlayer(P) != none)
-		Ms = Max(0, Ms - bbPlayer(P).IGPlus_JCDelayMs);
+		Ms = Max(0, Ms - bbPlayer(P).IGPlus_ABDelayMs);
 	return 0.0005 * P.Level.TimeDilation * Ms;
 }
 
@@ -7701,10 +8029,10 @@ function float IGPlus_GetLatencyMs(optional bool bOneWay) {
 	else if (PlayerReplicationInfo != None && PlayerReplicationInfo.Ping > 0)
 		PingMs = float(PlayerReplicationInfo.Ping);
 
-	// (One way: plus the other half of the Jitter Compensation delay, see
+	// (One way: plus the other half of the Adaptive Buffering delay, see
 	// IGPlus_WeaponImplementationBase.IGPlus_GetLatencyMs.)
 	if (bOneWay)
-		return FMax(0.0, 0.5 * (PingMs + float(IGPlus_JCDelayMs)));
+		return FMax(0.0, 0.5 * (PingMs + float(IGPlus_ABDelayMs)));
 	return FMax(0.0, PingMs);
 }
 
@@ -8655,9 +8983,9 @@ function float IGPlus_TradeTimeMargin() {
 			zzUTPure.Settings.MaxTradeTimeMargin,
 			((AverageServerDeltaTime + TimeBetweenNetUpdates)/Level.TimeDilation +
 			0.0005 * PlayerReplicationInfo.Ping * zzUTPure.Settings.TradePingMargin +
-			// (one-way delays: each with the other half of its Jitter Compensation delay)
-			0.0005 * (PlayerReplicationInfo.Ping + IGPlus_JCDelayMs
-				- bbPlayer(LastKiller).PlayerReplicationInfo.Ping - bbPlayer(LastKiller).IGPlus_JCDelayMs))
+			// (one-way delays: each with the other half of its Adaptive Buffering delay)
+			0.0005 * (PlayerReplicationInfo.Ping + IGPlus_ABDelayMs
+				- bbPlayer(LastKiller).PlayerReplicationInfo.Ping - bbPlayer(LastKiller).IGPlus_ABDelayMs))
 		);
 	return zzUTPure.Settings.MaxTradeTimeMargin;
 }
@@ -9904,13 +10232,23 @@ function xxReplicateMove(
 	NewMove.IGPlus_SavedViewRotation = ViewRotation;
 	// Precise Rewind Time: what our last frame showed of the others.
 	NewMove.IGPlus_PRTData = 0;
-	if (IGPlus_PRTSeenAt > 0 && IGPlus_PRTShownTick != 0) {
+	if (IGPlus_EnableTickInterp && IGPlus_TI_Clock > 0.0) {
+		// The tick position the shot's target was drawn at. Other moves
+		// report the usual one, for the weapons that trace later in the tick.
+		if (bDetLocalShot && IGPlus_PRTShotR > 0.0)
+			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(IGPlus_PRTShotR, IGPlus_bPRTShotPast, IGPlus_bPRTShotHeld);
+		else
+			NewMove.IGPlus_PRTData = IGPlus_TI_Pack(IGPlus_TI_Clock - IGPLUS_TI_MIN_DELAY);
+	} else if (IGPlus_PRTSeenAt > 0 && IGPlus_PRTShownTick != 0) {
 		if (bDetLocalShot)
 			NewMove.IGPlus_PRTData = IGPlus_PRTPack(IGPlus_PRTShownTick, IGPlus_PRTShownAge + IGPlus_PRTShotLead);
 		else
 			NewMove.IGPlus_PRTData = IGPlus_PRTPack(IGPlus_PRTShownTick, IGPlus_PRTShownAge);
 	}
 	IGPlus_PRTShotLead = 0.0;
+	IGPlus_PRTShotR = 0.0;
+	IGPlus_bPRTShotPast = false;
+	IGPlus_bPRTShotHeld = false;
 	// Only the shot frame's move (a single frame) carries the aimed view, so
 	// nothing else (dodges, other weapons) sees it.
 	if (bPSAAimFix && bDetLocalShot)
@@ -11171,10 +11509,7 @@ simulated function bool AdjustHitLocation(out vector HitLocation, vector TraceDi
 	TraceDir = Normal(TraceDir);
 	HitLocation = HitLocation + 0.5 * CollisionRadius * TraceDir;
 
-	if (Role != ROLE_Authority)
-		maxZ = Location.Z + (1.0 - 0.7 * DuckFractionRepl/255.0) * CollisionHeight;
-	else
-		maxZ = Location.Z + (1.0 - 0.7 * DuckFraction) * CollisionHeight;
+	maxZ = Location.Z + (1.0 - 0.7 * IGPlus_HitDuckFraction()) * CollisionHeight;
 	if ( HitLocation.Z <= maxZ )
 		return true;
 
@@ -11204,10 +11539,7 @@ simulated function bool ClientAdjustHitLocation(out vector HitLocation, vector T
 	if (FastTrace(Location, HitLocation) == false)
 		return false;
 
-	if (Role != ROLE_Authority)
-		maxZ = Location.Z + (1.0 - 0.7 * DuckFractionRepl/255.0) * CollisionHeight;
-	else
-		maxZ = Location.Z + (1.0 - 0.7 * DuckFraction) * CollisionHeight; // default game is 0.25
+	maxZ = Location.Z + (1.0 - 0.7 * IGPlus_HitDuckFraction()) * CollisionHeight; // default game is 0.25
 
 	if (HitLocation.Z <= maxZ)
 		return true;
@@ -11749,7 +12081,7 @@ event ServerTick(float DeltaTime) {
 	local float SnapshotInterval;
 
 	AverageServerDeltaTime = (AverageServerDeltaTime*99 + DeltaTime) * 0.01;
-	IGPlus_JCTick(DeltaTime);
+	IGPlus_ABTick(DeltaTime);
 	// Precise Rewind Time: stamp what this tick sends our client, and read
 	// our own measure of its ping to check its reports against.
 	if (RemoteRole == ROLE_AutonomousProxy && GetWeaponSettings() != none
@@ -11759,6 +12091,19 @@ event ServerTick(float DeltaTime) {
 		if (Level.TimeSeconds >= IGPlus_PRTPingReadTS) {
 			IGPlus_PRTServerPing = float(ConsoleCommand("GETPING"));
 			IGPlus_PRTPingReadTS = Level.TimeSeconds + 0.5;
+			IGPlus_PingRing[IGPlus_PingRingAt & 3] = IGPlus_PRTServerPing;
+			IGPlus_PingRingAt++;
+		}
+	}
+	// Tick Interpolation: our client learns the tick's number, and everyone
+	// learns which tick our last move ran in. UTPlusDummy takes its snapshot
+	// in the same ticks, so a client's updates of us line up with them.
+	if (IGPlus_EnableTickInterp && zzUTPure != None) {
+		IGPlus_TI_ServerTick = zzUTPure.IGPlus_GlobalTick;
+		if (CurrentTimeStamp > IGPlus_TI_MoveTS) {
+			IGPlus_TI_MoveTS = CurrentTimeStamp;
+			IGPlus_NetTick = byte(zzUTPure.IGPlus_GlobalTick & 255);
+			IGPlus_NetLoc = Location;
 		}
 	}
 	IGPlus_ProcessRemoteMovement();
@@ -11971,13 +12316,13 @@ state FeigningDeath
 		optional int PRTData
 	)
 	{
-		// Jitter Compensation: a queued player's move waits for its turn, and
+		// Adaptive Buffering: a queued player's move waits for its turn, and
 		// runs through the xxServerMove of the state we are in by then.
-		IGPlus_JCIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
+		IGPlus_ABIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
 			MiscData, MiscData2, View, ClientBase, OldMoveData1, OldMoveData2, DetRedoTS, DetRedoData, PRTData);
-		if (IGPlus_JCKept)
+		if (IGPlus_ABKept)
 			return;
-		IGPlus_JCSeen = IGPlus_JCPlaying == false;
+		IGPlus_ABSeen = IGPlus_ABPlaying == false;
 
 		Global.xxServerMove(
 			TimeStamp,
@@ -13129,13 +13474,13 @@ state Dying
 		local int KeepData, KeepData2, KeepDelta;
 		local bool bFireInput;
 
-		// Jitter Compensation: a queued player's move waits for its turn, and
+		// Adaptive Buffering: a queued player's move waits for its turn, and
 		// runs through the xxServerMove of the state we are in by then.
-		IGPlus_JCIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
+		IGPlus_ABIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
 			MiscData, MiscData2, View, ClientBase, OldMoveData1, OldMoveData2, DetRedoTS, DetRedoData, PRTData);
-		if (IGPlus_JCKept)
+		if (IGPlus_ABKept)
 			return;
-		IGPlus_JCSeen = IGPlus_JCPlaying == false;
+		IGPlus_ABSeen = IGPlus_ABPlaying == false;
 
 		KeepData = MiscData & 0xFFFF;      // drop held fire
 		KeepData2 = MiscData2 & 0x3FFFFFFF; // drop force taps too, or Det weapons shoot from the grave
@@ -13304,13 +13649,13 @@ ignores SeePlayer, HearNoise, KilledBy, Bump, HitWall, HeadZoneChange, FootZoneC
 		optional int PRTData
 	)
 	{
-		// Jitter Compensation: a queued player's move waits for its turn, and
+		// Adaptive Buffering: a queued player's move waits for its turn, and
 		// runs through the xxServerMove of the state we are in by then.
-		IGPlus_JCIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
+		IGPlus_ABIntercept(TimeStamp, MoveDeltaTime, Accel, ClientLocX, ClientLocY, ClientLocZ, ClientVel,
 			MiscData, MiscData2, View, ClientBase, OldMoveData1, OldMoveData2, DetRedoTS, DetRedoData, PRTData);
-		if (IGPlus_JCKept)
+		if (IGPlus_ABKept)
 			return;
-		IGPlus_JCSeen = IGPlus_JCPlaying == false;
+		IGPlus_ABSeen = IGPlus_ABPlaying == false;
 
 		Global.xxServerMove(
 			TimeStamp,
@@ -13442,6 +13787,7 @@ simulated function bool ClientCannotShoot(optional Weapon W, optional byte Mode,
 
 function xxPlayerTickEvents(float DeltaTime)
 {
+	local float TITarget;
 	local float CurrentTime;
 
 	CurrentTime = Level.TimeSeconds;
@@ -13472,6 +13818,25 @@ function xxPlayerTickEvents(float DeltaTime)
 			IGPlus_PRTSeenTick = IGPlus_PRTServerTick;
 			IGPlus_PRTSeenAt = CurrentTime;
 			IGPlus_PRTSeenLead = DeltaTime;
+		}
+		// Tick Interpolation: the server's tick position now. It runs with our
+		// own clock and is pulled toward the newest tick number a little each
+		// frame, so that the uneven arrival of the updates does not show.
+		if (IGPlus_EnableTickInterp) {
+			if (IGPlus_TI_TickLen <= 0.0)
+				IGPlus_TI_TickLen = 0.01;
+			if (IGPlus_TI_ServerTick != IGPlus_TI_SeenTick) {
+				if (IGPlus_TI_SeenAt > 0.0 && IGPlus_TI_ServerTick > IGPlus_TI_SeenTick && IGPlus_TI_ServerTick - IGPlus_TI_SeenTick < 20)
+					IGPlus_TI_TickLen += ((CurrentTime - IGPlus_TI_SeenAt) / float(IGPlus_TI_ServerTick - IGPlus_TI_SeenTick) - IGPlus_TI_TickLen) * 0.02;
+				IGPlus_TI_SeenTick = IGPlus_TI_ServerTick;
+				IGPlus_TI_SeenAt = CurrentTime;
+			}
+			TITarget = float(IGPlus_TI_SeenTick) + (CurrentTime - IGPlus_TI_SeenAt) / IGPlus_TI_TickLen;
+			IGPlus_TI_Clock += DeltaTime / IGPlus_TI_TickLen;
+			if (Abs(TITarget - IGPlus_TI_Clock) > 5.0)
+				IGPlus_TI_Clock = TITarget;
+			else
+				IGPlus_TI_Clock += (TITarget - IGPlus_TI_Clock) * 0.1;
 		}
 		if (IGPlus_DetServerShotTS != IGPlus_DetServerShotSeen) {
 			IGPlus_DetServerShotSeen = IGPlus_DetServerShotTS;
@@ -13808,6 +14173,10 @@ function ApplyBrightskins(PlayerReplicationInfo PRI) {
 		P.Weapon.bUnlit = false;
 }
 
+simulated function bool IGPlus_TI_Use() {
+	return Role == ROLE_SimulatedProxy && IGPlus_EnableTickInterp && IGPlus_EnableSnapshotInterpolation == false;
+}
+
 simulated function bool IGPlus_ShouldUseSnapshotInterpForProxy(optional bbPlayer P) {
 	if (P == none)
 		P = self;
@@ -13828,8 +14197,14 @@ function IGPlus_ApplyWarpFix(PlayerReplicationInfo PRI) {
 	P = bbPlayer(PRI.Owner);
 	if (IGPlus_ShouldUseSnapshotInterpForProxy(P))
 		return;
+	// Tick Interpolation draws a player only where an update had them. A
+	// held player gets no update, so they stop by themselves.
+	if (P.IGPlus_TI_Use()) {
+		P.IGPlus_bPRTRuleHeld = false;
+		return;
+	}
 
-	// Jitter Compensation: the server holds this player still, their next
+	// Adaptive Buffering: the server holds this player still, their next
 	// move is late. Stop moving them along now, not after IGPlus_WarpFixDelay.
 	// Never set for a player who is not queued.
 	P.IGPlus_bPRTRuleHeld = false;
@@ -14104,6 +14479,10 @@ event PreRender( canvas zzCanvas )
 			if (zzPRI.Owner != self && bbPlayer(zzPRI.Owner) != none && zzPRI.Owner.Role == ROLE_SimulatedProxy) {
 				bbPlayer(zzPRI.Owner).IGPlus_ShownLoc = zzPRI.Owner.Location;
 				bbPlayer(zzPRI.Owner).IGPlus_ShownFrame = IGPlus_FrameCount;
+				bbPlayer(zzPRI.Owner).IGPlus_ShownR = bbPlayer(zzPRI.Owner).IGPlus_TI_DrawnR;
+				bbPlayer(zzPRI.Owner).IGPlus_bShownPast = bbPlayer(zzPRI.Owner).IGPlus_TI_bDrawnPast;
+				bbPlayer(zzPRI.Owner).IGPlus_bShownHeld = bbPlayer(zzPRI.Owner).IGPlus_TI_bDrawnHeld;
+				bbPlayer(zzPRI.Owner).IGPlus_ShownDuck = bbPlayer(zzPRI.Owner).IGPlus_TI_DrawnDuck;
 			}
 		}
 	}
@@ -14463,6 +14842,8 @@ function IGPlus_LocationOffsetFix_AfterAll(float DeltaTime) {
 
 			if (IGPlus_ShouldUseSnapshotInterpForProxy(P))
 				P.IGPlus_SnapInterp_After(DeltaTime);
+			else if (P.IGPlus_TI_Use())
+				P.IGPlus_TI_After(DeltaTime);
 			else
 				P.IGPlus_LocationOffsetFix_After(DeltaTime);
 		}
@@ -14501,8 +14882,217 @@ simulated event Tick(float DeltaTime) {
 	if (IGPlus_ShouldUseSnapshotInterpForProxy()) {
 		if (IGPlus_LocationOffsetFix_Moved)
 			IGPlus_SnapInterp_After(DeltaTime);
+	} else if (IGPlus_TI_Use()) {
+		if (IGPlus_LocationOffsetFix_Moved)
+			IGPlus_TI_After(DeltaTime);
 	} else if (Settings.bEnableLocationOffsetFix || IGPlus_LocationOffsetFix_Moved) {
 		IGPlus_LocationOffsetFix_After(DeltaTime);
+	}
+}
+
+// Client, on another player's pawn (Tick Interpolation): the tick number of
+// an update whose low 8 bits are B. NowTick is the server's newest tick
+// number as our own pawn got it.
+static function int IGPlus_TI_FullTick(int B, int NowTick) {
+	local int Back;
+
+	Back = (NowTick - B) & 255;
+	// The stamp can be a tick ahead of the number our own pawn has.
+	if (Back > 200)
+		return NowTick + ((B - NowTick) & 255);
+	return NowTick - Back;
+}
+
+// Where the player was at tick position R: between the two updates around
+// it. Past the newest one they are carried on by its velocity for at most
+// IGPLUS_TI_MAX_CARRY ticks (the next update is on its way), then they stop.
+// bHeld: the server holds them still, so they are not carried on at all.
+// The server stands them the same way for a shot (UTPlusDummy.CompStartTick).
+simulated function vector IGPlus_TI_Sample(float R, float TickLen, optional bool bHeld) {
+	local int i, A, B;
+
+	if (IGPlus_TI_Num == 0)
+		return IGPlus_LocationOffsetFix_OldLocation;
+	B = (IGPlus_TI_Head - 1) & 15;
+	if (R >= float(IGPlus_TI_Tick[B]))
+		return IGPlus_TI_Loc[B] + IGPlus_TI_Vel[B] * (IGPlus_TI_CarryTicks(R - float(IGPlus_TI_Tick[B]), bHeld) * TickLen);
+	for (i = IGPlus_TI_Num - 1; i > 0; i--) {
+		B = (IGPlus_TI_Head - IGPlus_TI_Num + i) & 15;
+		A = (B - 1) & 15;
+		if (R >= float(IGPlus_TI_Tick[A])) {
+			if (IGPlus_TI_Tick[B] <= IGPlus_TI_Tick[A])
+				return IGPlus_TI_Loc[B];
+			return IGPlus_TI_Loc[A] + (IGPlus_TI_Loc[B] - IGPlus_TI_Loc[A])
+				* ((R - float(IGPlus_TI_Tick[A])) / float(IGPlus_TI_Tick[B] - IGPlus_TI_Tick[A]));
+		}
+	}
+	return IGPlus_TI_Loc[(IGPlus_TI_Head - IGPlus_TI_Num) & 15];
+}
+
+// The crouch at tick position R: the one that came with the older of the two
+// updates around R. The server takes it from the older snapshot too
+// (UTPlusDummy.CompSwap), so a hit near the top of a crouching player is
+// tested against the same height on both sides.
+simulated function byte IGPlus_TI_DuckAt(float R) {
+	local int i, A;
+
+	if (IGPlus_TI_Num == 0)
+		return DuckFractionRepl;
+	for (i = IGPlus_TI_Num - 1; i >= 0; i--) {
+		A = (IGPlus_TI_Head - IGPlus_TI_Num + i) & 15;
+		if (R >= float(IGPlus_TI_Tick[A]))
+			return IGPlus_TI_Duck[A];
+	}
+	return IGPlus_TI_Duck[(IGPlus_TI_Head - IGPlus_TI_Num) & 15];
+}
+
+// The crouch a hit test uses for this player. On a client with Tick
+// Interpolation it is the one that goes with the spot the last frame drew
+// them at, not the newest one the server sent.
+simulated function float IGPlus_HitDuckFraction() {
+	if (Role == ROLE_Authority)
+		return DuckFraction;
+	if (IGPlus_TI_Use() && IGPlus_TI_Num > 0)
+		return float(IGPlus_ShownDuck) / 255.0;
+	return float(DuckFractionRepl) / 255.0;
+}
+
+// Client, on another player's pawn (Tick Interpolation). Between frames the
+// pawn holds the animation as the engine plays it, and that is the newest one
+// the server sent. The body is drawn Delay seconds behind the newest update,
+// so the animation is drawn from Delay seconds ago as well: the engine's own
+// playback, looked up in the frames noted here. The pawn gets the engine's
+// animation back after the frame (IGPlus_LocationOffsetFix_Before).
+// While the body stands still (IGPlus_TI_bStopped) the animation stands still
+// with it, so a player whose updates stopped does not run on the spot.
+simulated function IGPlus_TI_AnimAfter(float Delay) {
+	local int i, A, B;
+	local float T, Span;
+
+	if (IGPlus_TI_bAnimSwapped)
+		return;
+	T = Level.TimeSeconds;
+	if (IGPlus_TI_AnimNum > 0 && T < IGPlus_TI_AnimTimeH[(IGPlus_TI_AnimHead - 1) & 63])
+		IGPlus_TI_AnimNum = 0;
+	// At most one note every 2 ms, so 64 of them cover the longest delay at any frame rate.
+	if (IGPlus_TI_AnimNum == 0 || T - IGPlus_TI_AnimTimeH[(IGPlus_TI_AnimHead - 1) & 63] >= 0.002) {
+		IGPlus_TI_AnimSeqH[IGPlus_TI_AnimHead & 63] = AnimSequence;
+		IGPlus_TI_AnimFrameH[IGPlus_TI_AnimHead & 63] = AnimFrame;
+		IGPlus_TI_AnimTimeH[IGPlus_TI_AnimHead & 63] = T;
+		IGPlus_TI_AnimHead = (IGPlus_TI_AnimHead + 1) & 63;
+		if (IGPlus_TI_AnimNum < 64)
+			IGPlus_TI_AnimNum++;
+	}
+	IGPlus_TI_RawSeq = AnimSequence;
+	IGPlus_TI_RawFrame = AnimFrame;
+	IGPlus_TI_bAnimSwapped = true;
+
+	if (IGPlus_TI_bStopped == false || IGPlus_TI_ShownSeq == '') {
+		T -= Delay;
+		A = -1;
+		for (i = IGPlus_TI_AnimNum - 1; i >= 0; i--) {
+			B = (IGPlus_TI_AnimHead - IGPlus_TI_AnimNum + i) & 63;
+			if (IGPlus_TI_AnimTimeH[B] <= T) {
+				A = B;
+				break;
+			}
+		}
+		if (A < 0)
+			A = (IGPlus_TI_AnimHead - IGPlus_TI_AnimNum) & 63;
+		IGPlus_TI_ShownSeq = IGPlus_TI_AnimSeqH[A];
+		IGPlus_TI_ShownFrame = IGPlus_TI_AnimFrameH[A];
+		// Between two notes of one animation running on: the part of the way.
+		B = (A + 1) & 63;
+		if (A != ((IGPlus_TI_AnimHead - 1) & 63)
+			&& IGPlus_TI_AnimSeqH[B] == IGPlus_TI_ShownSeq
+			&& IGPlus_TI_AnimFrameH[B] > IGPlus_TI_ShownFrame
+			&& (IGPlus_TI_ShownFrame >= 0.0 || IGPlus_TI_AnimFrameH[B] <= 0.0)) {
+			Span = IGPlus_TI_AnimTimeH[B] - IGPlus_TI_AnimTimeH[A];
+			if (Span > 0.0)
+				IGPlus_TI_ShownFrame += (IGPlus_TI_AnimFrameH[B] - IGPlus_TI_ShownFrame)
+					* FClamp((T - IGPlus_TI_AnimTimeH[A]) / Span, 0.0, 1.0);
+		}
+	}
+	AnimSequence = IGPlus_TI_ShownSeq;
+	AnimFrame = IGPlus_TI_ShownFrame;
+}
+
+// Client, on another player's pawn, every frame (Tick Interpolation). The
+// pawn is parked outside the map between frames, as for Location Offset Fix,
+// and is drawn here. An update is a new tick stamp. Its spot is IGPlus_NetLoc,
+// the one the server's snapshot of that tick has.
+simulated function IGPlus_TI_After(float DeltaTime) {
+	local bbPlayer LP;
+	local int Full, Prev, Delta;
+	local float Target, TickLen, Newest;
+
+	if (IGPlus_LocationOffsetFix_Moved == false)
+		return;
+	if (IGPlus_LocationOffsetFix_CollisionDummy != none) {
+		IGPlus_LocationOffsetFix_CollisionDummy.bCollideWorld = false;
+		IGPlus_LocationOffsetFix_CollisionDummy.SetCollision(false, false, false);
+	}
+	LP = bbPlayer(GetLocalPlayer());
+	if (LP == None)
+		return;
+
+	// The parked pawn has a stand-in velocity until an update brings one.
+	if (IGPlus_LocationOffsetFix_WasVelocityReplicated() == false)
+		Velocity = IGPlus_LocationOffsetFix_Velocity;
+
+	if (IGPlus_TI_bHasByte == false || IGPlus_NetTick != IGPlus_TI_LastByte) {
+		// A move of theirs ran in a new tick: an update.
+		Full = IGPlus_TI_FullTick(IGPlus_NetTick, LP.IGPlus_TI_ServerTick);
+		if (IGPlus_TI_Num > 0) {
+			Prev = IGPlus_TI_Tick[(IGPlus_TI_Head - 1) & 15];
+			Delta = Full - Prev;
+			// A stamp from far off (they were out of sight): start again.
+			if (Delta <= 0 || Delta > 60)
+				IGPlus_TI_Num = 0;
+			else if (float(Delta) > IGPlus_TI_Gap)
+				IGPlus_TI_Gap = float(Delta);
+			else
+				IGPlus_TI_Gap += (float(Delta) - IGPlus_TI_Gap) * 0.02;
+		}
+		if (IGPlus_TI_Num == 0) {
+			IGPlus_TI_Gap = 1.0;
+			IGPlus_TI_Delay = IGPLUS_TI_MIN_DELAY;
+		}
+		IGPlus_TI_Tick[IGPlus_TI_Head & 15] = Full;
+		IGPlus_TI_Loc[IGPlus_TI_Head & 15] = IGPlus_NetLoc;
+		IGPlus_TI_Vel[IGPlus_TI_Head & 15] = Velocity;
+		IGPlus_TI_Duck[IGPlus_TI_Head & 15] = DuckFractionRepl;
+		IGPlus_TI_Head = (IGPlus_TI_Head + 1) & 15;
+		if (IGPlus_TI_Num < 16)
+			IGPlus_TI_Num++;
+		IGPlus_TI_bHasByte = true;
+		IGPlus_TI_LastByte = IGPlus_NetTick;
+		// Drawn far enough back that the next update is in before it is needed.
+		Target = FClamp(IGPlus_TI_Gap + IGPLUS_TI_EXTRA, IGPLUS_TI_MIN_DELAY, IGPLUS_TI_MAX_DELAY);
+		IGPlus_TI_Delay += FClamp(Target - IGPlus_TI_Delay, -0.02, 0.05);
+	}
+
+	TickLen = FMax(LP.IGPlus_TI_TickLen, 0.001);
+	IGPlus_TI_DrawnR = LP.IGPlus_TI_Clock - IGPlus_TI_Delay;
+	Newest = float(IGPlus_TI_Tick[(IGPlus_TI_Head - 1) & 15]);
+	IGPlus_TI_bDrawnPast = IGPlus_TI_Num > 0 && IGPlus_TI_DrawnR >= Newest;
+	// Adaptive Buffering holds this player still on the server and says so
+	// (their queue ran empty). They stand still here too, with no carrying on.
+	IGPlus_TI_bDrawnHeld = IGPlus_TI_bDrawnPast && IGPlus_WarpFixData.bHold;
+	IGPlus_TI_bStopped = IGPlus_TI_bDrawnPast
+		&& (IGPlus_TI_bDrawnHeld || IGPlus_TI_DrawnR - Newest >= IGPLUS_TI_MAX_CARRY);
+	IGPlus_TI_DrawnDuck = IGPlus_TI_DuckAt(IGPlus_TI_DrawnR);
+	bCollideWorld = false;
+	SetLocation(IGPlus_TI_Sample(IGPlus_TI_DrawnR, TickLen, IGPlus_TI_bDrawnHeld));
+	bCollideWorld = true;
+	IGPlus_TI_AnimAfter(IGPlus_TI_Delay * TickLen);
+
+	IGPlus_LocationOffsetFix_Moved = false;
+	if (IGPlus_LocationOffsetFix_FootstepQueued) {
+		// No footsteps from a body that stands still.
+		if (IGPlus_TI_bStopped == false)
+			FootStepping();
+		IGPlus_LocationOffsetFix_FootstepQueued = false;
 	}
 }
 
@@ -15418,6 +16008,14 @@ simulated function IGPlus_LocationOffsetFix_Before() {
 	if (IGPlus_LocationOffsetFix_Moved)
 		return;
 
+	// Tick Interpolation drew an earlier moment of the animation
+	// (IGPlus_TI_AnimAfter). The engine plays on from its own.
+	if (IGPlus_TI_bAnimSwapped) {
+		AnimSequence = IGPlus_TI_RawSeq;
+		AnimFrame = IGPlus_TI_RawFrame;
+		IGPlus_TI_bAnimSwapped = false;
+	}
+
 	if (IGPlus_LocationOffsetFix_CollisionDummy == none)
 		IGPlus_LocationOffsetFix_SpawnCollisionDummy();
 
@@ -15467,6 +16065,8 @@ function IGPlus_LocationOffsetFix_TickBefore() {
 			if (P.Role != ROLE_SimulatedProxy) continue;
 
 			if (IGPlus_ShouldUseSnapshotInterpForProxy(P))
+				P.IGPlus_LocationOffsetFix_Before();
+			else if (P.IGPlus_TI_Use())
 				P.IGPlus_LocationOffsetFix_Before();
 			else if (Settings.bEnableLocationOffsetFix)
 				P.IGPlus_LocationOffsetFix_Before();
@@ -15708,7 +16308,7 @@ simulated function xxDrawDebugData(canvas zzC, float zzx, float zzY) {
 	zzC.SetPos(zzx, zzY + 60);
 	zzC.DrawText("ClientLoc:"@debugPlayerLocation);
 	zzC.SetPos(zzx, zzY + 80);
-	zzC.DrawText("Jitter Compensation delay:"@IGPlus_JCDelayMs@"ms");
+	zzC.DrawText("Adaptive Buffering delay:"@IGPlus_ABDelayMs@"ms");
 	zzC.SetPos(zzx, zzY + 100);
 	zzC.DrawText("HitLocation:"@debugClientHitLocation);
 	zzC.SetPos(zzx, zzY + 120);
@@ -20306,6 +20906,7 @@ function IGPlus_ApplyNetcodeSettingsToPlayers() {
 		BP.IGPlus_PredictedDiscBoost = zzUTPure.Settings.bEnablePredictedDiscBoost;
 		bOldSnap = BP.IGPlus_EnableSnapshotInterpolation;
 		BP.IGPlus_EnableSnapshotInterpolation = zzUTPure.Settings.bEnableSnapshotInterpolation;
+		BP.IGPlus_EnableTickInterp = zzUTPure.Settings.TickInterpolationActive();
 
 		if (bOldSnap != BP.IGPlus_EnableSnapshotInterpolation) {
 			BP.IGPlus_SnapInterp_ServerNextTime = 0;
@@ -20459,8 +21060,10 @@ function IGPlus_ServerRequestSettings() {
 	IGPlus_ServerSendSetting("SnapshotInterpSendHz");
 	IGPlus_ServerSendSetting("SnapshotInterpRewindMs");
 	IGPlus_ServerSendSetting("bEnableWarpFix");
-	IGPlus_ServerSendSetting("bEnableJitterCompensation");
-	IGPlus_ServerSendSetting("JitterCompensationMax");
+	IGPlus_ServerSendSetting("bEnableAdaptiveBuffering");
+	IGPlus_ServerSendSetting("bEnableTickInterpolation");
+	IGPlus_ServerSendSetting("bEnableFireTimeOrder");
+	IGPlus_ServerSendSetting("AdaptiveBufferingMax");
 
 	IGPlus_ServerSendSetting("MinClientRate");
 	IGPlus_ServerSendSetting("MaxClientRate");

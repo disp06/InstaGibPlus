@@ -17,9 +17,13 @@ var bool bSnapBlockPlayers;
 var bool bSnapProjTarget;
 
 var float ServerTimeStamp;
-// Jitter Compensation held the player still from this snapshot on (their
+// Adaptive Buffering held the player still from this snapshot on (their
 // move queue ran empty), and the other clients drew them standing there.
 var bool bHeld;
+// The number of the server tick this snapshot was taken in (UTPure.IGPlus_GlobalTick),
+// and whether it was taken with no move having run (the start of a hold).
+var int Tick;
+var bool bNoMove;
 var float ClientTimeStamp;
 
 var name  AnimSequence;
