@@ -298,6 +298,9 @@ function TestTickInterp() {
 	// A stall of 10 ticks at a dodge's speed is movement, not a teleport.
 	LogTestResult(class'bbPlayer'.static.IGPlus_TI_IsJump(vect(0,0,0), vect(100,0,0), 10, 0.01) == false,
 		"TickInterp_a_long_gap_at_speed_is_still_movement");
+	// The server tests a shot against the spot as the client got it: in whole units.
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_WireLoc(vect(2317.04,-126.51,-212.2)) == vect(2317,-127,-212),
+		"TickInterp_the_server_rounds_a_spot_as_the_engine_sends_it");
 }
 
 // Where the client's own trace stands another player (bbPlayer.IGPlus_PRTRulePos).

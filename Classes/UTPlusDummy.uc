@@ -17,9 +17,11 @@ var bool bCompActive;
 var float CompGap, CompCarry;
 // The last rewind by a tick position: the ticks of the two snapshots used (the second is 0 for a carry).
 var int CompTickA, CompTickB;
-// A rewind by a tick position: a client with Tick Interpolation knows no
-// holds, it draws between the updates it got. So the held mark is left out.
-var bool bCompIgnoreHold;
+// A rewind by a tick position (CompStartTick). A client with Tick
+// Interpolation knows no holds, it draws between the updates it got. So the
+// held mark is left out. And the spots it got are in whole units, so ours
+// are rounded the same way (bbPlayer.IGPlus_TI_WireLoc).
+var bool bCompTick;
 
 var bool ActualWasColliding;
 var bool ActualWasBlockingActors;
@@ -299,7 +301,7 @@ function CompStartTick(float R, float TickLen, optional bool bPast, optional boo
 	CompTickB = 0;
 	if (A != None)
 		CompTickA = A.Tick;
-	bCompIgnoreHold = true;
+	bCompTick = true;
 	if (A == None) {
 		// Older than everything we kept: the oldest snapshot.
 		if (B != None)
@@ -307,7 +309,8 @@ function CompStartTick(float R, float TickLen, optional bool bPast, optional boo
 	} else if (bPast == false && B != None && B.Tick > A.Tick) {
 		CompTickB = B.Tick;
 		// Not between the two ends of a teleport: at the older one, as the client draws it.
-		if (class'bbPlayer'.static.IGPlus_TI_IsJump(A.Loc, B.Loc, B.Tick - A.Tick, TickLen))
+		if (class'bbPlayer'.static.IGPlus_TI_IsJump(class'bbPlayer'.static.IGPlus_TI_WireLoc(A.Loc),
+				class'bbPlayer'.static.IGPlus_TI_WireLoc(B.Loc), B.Tick - A.Tick, TickLen))
 			CompSwap(A, None, 0.0, 0.0);
 		else
 			CompSwap(A, B, (R - float(A.Tick)) / float(B.Tick - A.Tick), 0.0);
@@ -315,7 +318,7 @@ function CompStartTick(float R, float TickLen, optional bool bPast, optional boo
 		CompSwap(A, None, -1.0, A.ServerTimeStamp
 			+ class'bbPlayer'.static.IGPlus_TI_CarryTicks(R - float(A.Tick), bHeld && bHoldAfter) * TickLen);
 	}
-	bCompIgnoreHold = false;
+	bCompTick = false;
 }
 
 function TakeDamage(
@@ -333,7 +336,7 @@ function TakeDamage(
 }
 
 function CompSwap(UTPlusSnapshot SnapA, UTPlusSnapshot SnapB, float Alpha, float TargetTimeStamp) {
-	local vector TargetLoc;
+	local vector TargetLoc, LocA, LocB;
 	local vector TargetVel;
 	local bbPlayer BP;
 	local Mover BaseMover;
@@ -343,14 +346,23 @@ function CompSwap(UTPlusSnapshot SnapA, UTPlusSnapshot SnapB, float Alpha, float
 	if (Actual == None || Actual.bDeleteMe || SnapA == None || bCompActive)
 		return;
 
+	LocA = SnapA.Loc;
+	if (SnapB != None)
+		LocB = SnapB.Loc;
+	// The spots as a client with Tick Interpolation got them.
+	if (bCompTick) {
+		LocA = class'bbPlayer'.static.IGPlus_TI_WireLoc(LocA);
+		LocB = class'bbPlayer'.static.IGPlus_TI_WireLoc(LocB);
+	}
+
 	// Compute position/velocity based on compensation mode
-	if (SnapA.bHeld && bCompIgnoreHold == false) {
+	if (SnapA.bHeld && bCompTick == false) {
 		// Held still by Adaptive Buffering from this snapshot until the next
 		// one. The other clients drew the player standing here
 		// (bbPlayer.IGPlus_ApplyWarpFix), so nothing carries them on.
 		CompGap = TargetTimeStamp - SnapA.ServerTimeStamp;
 		CompCarry = 0;
-		TargetLoc = SnapA.Loc;
+		TargetLoc = LocA;
 		TargetVel = SnapA.Vel;
 	} else if (Alpha == -1.0) {
 		// Extrapolation from SnapA. Capped: a player whose packets stall has
@@ -363,15 +375,15 @@ function CompSwap(UTPlusSnapshot SnapA, UTPlusSnapshot SnapB, float Alpha, float
 			XpolTime = 0;
 		CompGap = TargetTimeStamp - SnapA.ServerTimeStamp;
 		CompCarry = XpolTime;
-		TargetLoc = SnapA.Loc + SnapA.Vel * XpolTime;
+		TargetLoc = LocA + SnapA.Vel * XpolTime;
 		TargetVel = SnapA.Vel;
 	} else if (SnapB != None) {
 		// Interpolation between SnapA and SnapB
-		TargetLoc = LerpVector(Alpha, SnapA.Loc, SnapB.Loc);
+		TargetLoc = LerpVector(Alpha, LocA, LocB);
 		TargetVel = LerpVector(Alpha, SnapA.Vel, SnapB.Vel);
 	} else {
 		// Direct snap to SnapA
-		TargetLoc = SnapA.Loc;
+		TargetLoc = LocA;
 		TargetVel = SnapA.Vel;
 	}
 

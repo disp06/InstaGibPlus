@@ -956,6 +956,7 @@ var byte IGPlus_NetTick;             // server: the low 8 bits of the tick our l
 // value of its own: the engine blends a pawn's Location into the client's
 // copy (AActor::PostNetReceive, 15% of the way when the pawn is near), so a
 // client that gets two updates in one frame never sees the second spot.
+// In whole units, as the engine would round it on the way (IGPlus_TI_WireLoc).
 var vector IGPlus_NetLoc;
 var float IGPlus_TI_MoveTS;          // server: the move time that stamp belongs to
 var int IGPlus_TI_ServerTick;        // server: the number of the current tick. Sent to our own client.
@@ -3768,6 +3769,18 @@ static function float IGPlus_TI_UnpackDelay(int Data) {
 // at the older one until the newer one's tick. Client and server both use this.
 static function bool IGPlus_TI_IsJump(vector A, vector B, int Ticks, float TickLen) {
 	return VSize(B - A) > 100.0 + 4000.0 * float(Ticks) * TickLen;
+}
+// A spot as a client gets it. The engine sends a vector rounded to whole
+// units (UStructProperty::NetSerializeItem), so a client draws and tests a
+// player between whole-unit spots. The server sends IGPlus_NetLoc already
+// rounded this way and tests a Tick Interpolation shot against the same
+// rounded spots (UTPlusDummy.CompSwap). Tested against its exact spots, a
+// shot that grazed a player by under half a unit could go either way.
+static function vector IGPlus_TI_WireLoc(vector V) {
+	V.X = class'Utilities'.static.Round(V.X);
+	V.Y = class'Utilities'.static.Round(V.Y);
+	V.Z = class'Utilities'.static.Round(V.Z);
+	return V;
 }
 static function float IGPlus_TI_CarryTicks(float Past, bool bHeld) {
 	if (bHeld || Past <= 0.0)
@@ -12184,7 +12197,7 @@ event ServerTick(float DeltaTime) {
 		if (CurrentTimeStamp > IGPlus_TI_MoveTS) {
 			IGPlus_TI_MoveTS = CurrentTimeStamp;
 			IGPlus_NetTick = byte(zzUTPure.IGPlus_GlobalTick & 255);
-			IGPlus_NetLoc = Location;
+			IGPlus_NetLoc = IGPlus_TI_WireLoc(Location);
 		}
 	}
 	IGPlus_ProcessRemoteMovement();
