@@ -19,8 +19,8 @@ var float CompGap, CompCarry;
 var int CompTickA, CompTickB;
 // A rewind by a tick position (CompStartTick). A client with Tick
 // Interpolation knows no holds, it draws between the updates it got. So the
-// held mark is left out. And the spots it got are in whole units, so ours
-// are rounded the same way (bbPlayer.IGPlus_TI_WireLoc).
+// held mark is left out. And the spots it got are in quarters of a unit, so
+// ours are rounded the same way (bbPlayer.IGPlus_TI_WireLoc).
 var bool bCompTick;
 
 var bool ActualWasColliding;

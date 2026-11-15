@@ -1956,8 +1956,11 @@ If enabled, a client draws every other player between two real updates from the 
 
 How it works:
 
-* The server numbers its ticks. With each player it sends the number of the tick that player's last move ran in, and where the player stood at the end of that tick. That costs about 10 bytes for each other player in each tick.
-* The engine sends a position rounded to whole units, so the client draws and tests a player between whole-unit spots. The server tests a shot against the same rounded spots. Tested against its exact spots, a shot that grazed a player by under half a unit could count on one side and miss on the other.
+* The server numbers its ticks. With each player it sends the number of the tick that player's last move ran in, where the player stood at the end of that tick, and the time of that move in one byte. That costs about 12 bytes for each other player in each tick.
+* A player is drawn at an even pace. A tick's spot is where the player's last move ended, and one tick runs more of a player's move time than the next. Drawn by tick number alone, a player who moves evenly speeds up and slows down from tick to tick, more the faster they move, so most on a jump pad. The client takes the moment to draw on an even clock of the player's own move time and draws the spot between the two updates around it. The shot reports that spot as a part of the way between those two updates, and the server stands the player there as before.
+* The moment a player is drawn at runs on the client's own frame time. Each frame it moves on by exactly the time the frame took. It follows the moment the tick clock asks for only slowly, because that one shifts a little with every update that comes early or late. Close to a player's newest update it runs up to 15% slower, so a late update is met with a slightly slower body and not with one that stops.
+* A dead player is hidden and has no updates. The server sends none while they are dead, and the client drops the ones from before. After the respawn they are drawn from their first update at the new spot, and until it arrives they are not drawn. The server tests them from that same update on.
+* A position is sent in quarters of a unit. The engine sends a position rounded to whole units, so the quarters go in a byte of their own. The client draws and tests a player between these spots, and the server tests a shot against the same rounded spots. Tested against its exact spots, a shot that grazed a player by less than the rounding could count on one side and miss on the other. In whole units alone a walking player was drawn unevenly, because each spot was up to half a unit off.
 * A client reads a player's update once per frame. When two updates arrive in one frame, or a packet is lost, it has no update for one tick and draws that player across the gap. A shot reports which two updates its target was drawn between, and the server stands the players between the same two, not between the two snapshots next to each other.
 * The client keeps each player's last 16 updates. It draws a player behind the server's tick clock by the gap between that player's updates plus one tick, 2 ticks at least and 10 at most.
 * Two updates too far apart to be movement, as after a teleporter, are not drawn as a slide. The player stays at the older one until the newer one's tick.
@@ -1981,6 +1984,7 @@ A player with `enableDebugData 1` gets one `Tick Interpolation:` line in the deb
 | `delayMsAvg`, `delayMsMax` | How far behind the newest update the player was drawn |
 | `gapTicksMax` | The longest gap between two updates, in server ticks |
 | `back1`, `back3`, `backMax` | Frames that moved the body backwards by over 1 and over 3 units, and the largest such step |
+| `paceMsMax` | The furthest one update's move time was off the even pace, in milliseconds |
 | `resets`, `clockSnaps` | Times the stored updates were thrown away, and times the tick clock jumped |
 
 A client's Location Offset Fix setting has no effect while this is on. The picture is later than without it, by the delay above. A player whose packets stall is drawn standing still for a moment and then catches up. [bEnableAdaptiveBuffering](#benableadaptivebuffering) evens that out on the server.

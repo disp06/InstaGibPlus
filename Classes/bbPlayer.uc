@@ -973,9 +973,16 @@ var byte IGPlus_NetTick;             // server: the low 8 bits of the tick our l
 // value of its own: the engine blends a pawn's Location into the client's
 // copy (AActor::PostNetReceive, 15% of the way when the pawn is near), so a
 // client that gets two updates in one frame never sees the second spot.
-// In whole units, as the engine would round it on the way (IGPlus_TI_WireLoc).
+// In quarters of a unit (IGPlus_TI_WireLoc): the whole units here, rounded
+// down, and the quarters in IGPlus_NetLocFrac.
 var vector IGPlus_NetLoc;
+var byte IGPlus_NetLocFrac;
 var float IGPlus_TI_MoveTS;          // server: the move time that stamp belongs to
+// Server: the low 8 bits of that move time in half milliseconds. Sent with
+// every pawn. A tick's spot is where our last move ended, and how much move
+// time a tick ran varies, so the spots of two ticks are an uneven time apart.
+// With this a client knows how far apart (IGPlus_TI_Pace).
+var byte IGPlus_NetMoveT;
 var int IGPlus_TI_ServerTick;        // server: the number of the current tick. Sent to our own client.
 // Client, on our own pawn: the server's tick clock as we see it.
 var int IGPlus_TI_SeenTick;          // the newest tick number that arrived
@@ -995,6 +1002,18 @@ var vector IGPlus_TI_Vel[16];
 var int IGPlus_TI_Head, IGPlus_TI_Num;
 var bool IGPlus_TI_bHasByte;
 var byte IGPlus_TI_LastByte;
+// The move time of each update in seconds, counted on from its first update
+// (IGPlus_NetMoveT), and how far the newest update's move time is from an
+// even pace, in seconds (IGPlus_TI_Pace).
+var float IGPlus_TI_MT[16];
+var byte IGPlus_TI_LastMT;
+var float IGPlus_TI_Dev;
+// The moment this player is drawn at, as a move time (IGPlus_TI_Pace), and
+// the two updates and the part of the way between them it fell on this frame.
+var float IGPlus_TI_Mu;
+var bool IGPlus_TI_bMu;
+var int IGPlus_TI_PaceA;
+var float IGPlus_TI_PaceAlpha;
 var float IGPlus_TI_Gap;             // ticks between its updates, of late
 var float IGPlus_TI_Delay;           // how many ticks behind the clock it is drawn
 var float IGPlus_TI_DrawnR;          // the tick position it was drawn at this frame
@@ -1025,6 +1044,7 @@ var bool IGPlus_TI_bAnimSwapped;
 var int IGPlus_TI_StFrames, IGPlus_TI_StPast, IGPlus_TI_StStopped, IGPlus_TI_StHeld;
 var int IGPlus_TI_StUpdates, IGPlus_TI_StResets, IGPlus_TI_StBack1, IGPlus_TI_StBack3;
 var float IGPlus_TI_StDelaySum, IGPlus_TI_StDelayMax, IGPlus_TI_StGapMax, IGPlus_TI_StBackMax;
+var float IGPlus_TI_StDevMax;        // the furthest an update's move time was off the even pace, in seconds
 var vector IGPlus_TI_StPrevLoc, IGPlus_TI_StPrevStep;
 var float IGPlus_TI_StPrevTime, IGPlus_TI_StPrevDt;
 var bool IGPlus_TI_StHavePrev;
@@ -1043,6 +1063,15 @@ const IGPLUS_TI_EXTRA = 1.0;         // ticks of delay on top of the gap between
 const IGPLUS_TI_MIN_DELAY = 2.0;
 const IGPLUS_TI_MAX_DELAY = 10.0;
 const IGPLUS_TI_MAX_CARRY = 2.0;     // ticks a player is carried on past their newest update
+const IGPLUS_TI_MT_UNIT = 0.0005;    // seconds in one step of IGPlus_NetMoveT
+const IGPLUS_TI_MT_WRAP = 0.128;     // seconds until IGPlus_NetMoveT comes round again
+const IGPLUS_TI_PACE_RATE = 0.05;    // how fast the even pace follows a player's updates, per update
+const IGPLUS_TI_MU_TIME = 0.5;       // seconds: the drawn moment is 63% of the way to the asked one after this
+const IGPLUS_TI_MU_SLEW = 0.03;      // and it runs at most this much faster or slower than real time on the way
+const IGPLUS_TI_MU_SLEW_FAR = 0.15;  // or this much: when it is over a tick off, has to fall back, or runs low
+const IGPLUS_TI_MU_TIME_BACK = 0.1;  // seconds for falling back
+const IGPLUS_TI_MU_RESERVE = 0.75;   // ticks before the newest update under which it runs slower
+const IGPLUS_TI_MU_SNAP = 5.0;       // ticks off at which it is set at once
 var bool IGPlus_PressedJumpSave;
 var IGPlus_SavedInputChain IGPlus_SavedInputChain;
 var IGPlus_DataBuffer IGPlus_InputReplicationBuffer;
@@ -1155,6 +1184,8 @@ replication
 		IGPlus_EnableTickInterp,
 		IGPlus_NetTick,
 		IGPlus_NetLoc,
+		IGPlus_NetLocFrac,
+		IGPlus_NetMoveT,
 		IGPlus_SnapReplicatedData,
 		IGPlus_SnapReplicatedDataPrev;
 
@@ -3862,22 +3893,66 @@ static function int IGPlus_TI_UnpackSpan(int Data) {
 static function bool IGPlus_TI_IsJump(vector A, vector B, int Ticks, float TickLen) {
 	return VSize(B - A) > 100.0 + 4000.0 * float(Ticks) * TickLen;
 }
-// A spot as a client gets it. The engine sends a vector rounded to whole
-// units (UStructProperty::NetSerializeItem), so a client draws and tests a
-// player between whole-unit spots. The server sends IGPlus_NetLoc already
-// rounded this way and tests a Tick Interpolation shot against the same
-// rounded spots (UTPlusDummy.CompSwap). Tested against its exact spots, a
-// shot that grazed a player by under half a unit could go either way.
+// A spot as a client gets it: in quarters of a unit. The engine sends a
+// vector rounded to whole units (UStructProperty::NetSerializeItem) and takes
+// no number over 65535, so the whole units go in IGPlus_NetLoc and the
+// quarters in IGPlus_NetLocFrac. The client draws and tests a player between
+// these spots, and the server tests a Tick Interpolation shot against the
+// same rounded spots (UTPlusDummy.CompSwap). Tested against its exact spots,
+// a shot that grazed a player by less than the rounding could go either way.
+// Whole units alone left a walking player drawn unevenly: each spot was up to
+// half a unit off, with a step of 2 to 3 units between two ticks.
 static function vector IGPlus_TI_WireLoc(vector V) {
-	V.X = class'Utilities'.static.Round(V.X);
-	V.Y = class'Utilities'.static.Round(V.Y);
-	V.Z = class'Utilities'.static.Round(V.Z);
+	V.X = class'Utilities'.static.Round(V.X * 4.0) / 4.0;
+	V.Y = class'Utilities'.static.Round(V.Y * 4.0) / 4.0;
+	V.Z = class'Utilities'.static.Round(V.Z * 4.0) / 4.0;
 	return V;
+}
+// The whole units of a spot from IGPlus_TI_WireLoc, rounded down.
+static function vector IGPlus_TI_LocWhole(vector V) {
+	local vector W;
+
+	W.X = float(int(V.X));
+	if (W.X > V.X) W.X -= 1.0;
+	W.Y = float(int(V.Y));
+	if (W.Y > V.Y) W.Y -= 1.0;
+	W.Z = float(int(V.Z));
+	if (W.Z > V.Z) W.Z -= 1.0;
+	return W;
+}
+// The quarters on top of them: 2 bits for X, 2 for Y, 2 for Z.
+static function byte IGPlus_TI_LocFrac(vector V) {
+	local vector W;
+
+	W = IGPlus_TI_LocWhole(V);
+	return byte((int((V.X - W.X) * 4.0 + 0.5) & 3)
+		| ((int((V.Y - W.Y) * 4.0 + 0.5) & 3) << 2)
+		| ((int((V.Z - W.Z) * 4.0 + 0.5) & 3) << 4));
+}
+// The spot back from the two.
+static function vector IGPlus_TI_LocJoin(vector Whole, byte Frac) {
+	Whole.X += float(Frac & 3) * 0.25;
+	Whole.Y += float((Frac >> 2) & 3) * 0.25;
+	Whole.Z += float((Frac >> 4) & 3) * 0.25;
+	return Whole;
 }
 static function float IGPlus_TI_CarryTicks(float Past, bool bHeld) {
 	if (bHeld || Past <= 0.0)
 		return 0.0;
 	return FMin(Past, IGPLUS_TI_MAX_CARRY);
+}
+// A move time as IGPlus_NetMoveT carries it.
+static function byte IGPlus_TI_MoveByte(float TS) {
+	return byte(int(TS / IGPLUS_TI_MT_UNIT) & 255);
+}
+// The move time between two updates, from their two bytes. The byte comes
+// round every 128 ms, so the count of whole rounds is the one that brings the
+// result nearest to Expected, the time their tick numbers are apart.
+static function float IGPlus_TI_MoveDelta(byte Older, byte Newer, float Expected) {
+	local float D;
+
+	D = float((int(Newer) - int(Older)) & 255) * IGPLUS_TI_MT_UNIT;
+	return FMax(0.0, D + IGPLUS_TI_MT_WRAP * class'Utilities'.static.Round((Expected - D) / IGPLUS_TI_MT_WRAP));
 }
 // The server's reading of it. NowTick is the server's newest tick number.
 static function float IGPlus_TI_Unpack(int Data, int NowTick) {
@@ -12362,12 +12437,17 @@ event ServerTick(float DeltaTime) {
 	// Tick Interpolation: our client learns the tick's number, and everyone
 	// learns which tick our last move ran in. UTPlusDummy takes its snapshot
 	// in the same ticks, so a client's updates of us line up with them.
+	// Not while we are dead: UTPlusDummy takes no snapshot then, and a
+	// client would keep the spot we died at as our newest one. The first tick
+	// of the next life gives a stamp at once, as it gives a snapshot.
 	if (IGPlus_EnableTickInterp && zzUTPure != None) {
 		IGPlus_TI_ServerTick = zzUTPure.IGPlus_GlobalTick;
-		if (CurrentTimeStamp > IGPlus_TI_MoveTS) {
+		if (CurrentTimeStamp > IGPlus_TI_MoveTS && Health > 0 && IsInState('Dying') == false) {
 			IGPlus_TI_MoveTS = CurrentTimeStamp;
 			IGPlus_NetTick = byte(zzUTPure.IGPlus_GlobalTick & 255);
-			IGPlus_NetLoc = IGPlus_TI_WireLoc(Location);
+			IGPlus_NetLoc = IGPlus_TI_LocWhole(IGPlus_TI_WireLoc(Location));
+			IGPlus_NetLocFrac = IGPlus_TI_LocFrac(IGPlus_TI_WireLoc(Location));
+			IGPlus_NetMoveT = IGPlus_TI_MoveByte(CurrentTimeStamp);
 		}
 	}
 	IGPlus_ProcessRemoteMovement();
@@ -15185,6 +15265,102 @@ static function int IGPlus_TI_FullTick(int B, int NowTick) {
 	return NowTick - Back;
 }
 
+// Client, on another player's pawn (Tick Interpolation): the tick position
+// to draw them at, so that they move at an even pace. R is the tick position
+// the clock asks for. A tick's spot is where the player's last move ended, and
+// one tick runs more of their move time than the next, so drawn by tick
+// number a player who moves evenly speeds up and slows down from tick to tick
+// (more the faster they move: a jump pad shows it most). Each update's move
+// time is known (IGPlus_NetMoveT). The moment drawn is taken on an even
+// clock of that move time, and the result is the tick position between the
+// two updates around it that stands for the same spot. Everything after this
+// uses that tick position as before, and so does the shot's report: the
+// server stands the player at the same part of the way between the same two
+// snapshots, with nothing new to trust.
+//
+// The moment drawn runs on our own frame time (IGPlus_TI_Mu): each frame it
+// moves on by exactly the time the frame took, as the other player's own
+// clock does. It follows the moment the tick clock asks for only slowly,
+// because that one is nudged by every update that comes early or late, by the
+// drawing delay as it adapts and by the estimate of the tick length, about a
+// millisecond from frame to frame in all. At 1000 units a second that is a
+// unit a frame. Only a difference of several ticks is taken at once.
+// IGPlus_TI_PaceA and IGPlus_TI_PaceAlpha keep the two updates and the part
+// of the way between them, so the spot is drawn from those and not from the
+// tick position, which as a float is too coarse late in a long map.
+simulated function float IGPlus_TI_Pace(float R, float TickLen, float DeltaTime) {
+	local int i, A, B;
+	local float Mu, Err, Slew;
+
+	IGPlus_TI_PaceA = -1;
+	if (IGPlus_TI_Num == 0) {
+		IGPlus_TI_bMu = false;
+		return R;
+	}
+	B = (IGPlus_TI_Head - 1) & 15;
+	// The move time that goes with R: the newest update's, moved by the ticks
+	// between, less what that update is off the even pace.
+	Mu = IGPlus_TI_MT[B] + (R - float(IGPlus_TI_Tick[B])) * TickLen - IGPlus_TI_Dev;
+	if (IGPlus_TI_bMu == false || Abs(Mu - IGPlus_TI_Mu - DeltaTime) > IGPLUS_TI_MU_SNAP * TickLen) {
+		IGPlus_TI_Mu = Mu;
+		IGPlus_TI_bMu = true;
+	} else {
+		IGPlus_TI_Mu += DeltaTime;
+		Err = Mu - IGPlus_TI_Mu;
+		if (Err < 0.0) {
+			// Ahead of the asked moment: there is less in hand than the delay
+			// wants, and the next late update would leave nothing to draw
+			// from. Falling back is quick.
+			Err = FMax(Err * DeltaTime / IGPLUS_TI_MU_TIME_BACK, -IGPLUS_TI_MU_SLEW_FAR * DeltaTime);
+		} else {
+			// Behind it: only more delay for a moment. Faster when it is over
+			// a tick off, so a real change in a player's line is caught up
+			// with in a few tenths of a second.
+			if (Err > TickLen)
+				Slew = IGPLUS_TI_MU_SLEW_FAR * DeltaTime;
+			else
+				Slew = IGPLUS_TI_MU_SLEW * DeltaTime;
+			Err = FMin(Err * DeltaTime / IGPLUS_TI_MU_TIME, Slew);
+		}
+		// Close to the newest update: run slower, so a late one is met with a
+		// slightly slower body and not with one that stops.
+		if (IGPlus_TI_MT[B] - IGPlus_TI_Mu < IGPLUS_TI_MU_RESERVE * TickLen)
+			Err = FMin(Err, -IGPLUS_TI_MU_SLEW_FAR * DeltaTime);
+		IGPlus_TI_Mu += Err;
+	}
+	Mu = IGPlus_TI_Mu;
+	if (Mu >= IGPlus_TI_MT[B])
+		return float(IGPlus_TI_Tick[B]) + (Mu - IGPlus_TI_MT[B]) / TickLen;
+	for (i = IGPlus_TI_Num - 1; i > 0; i--) {
+		B = (IGPlus_TI_Head - IGPlus_TI_Num + i) & 15;
+		A = (B - 1) & 15;
+		if (Mu >= IGPlus_TI_MT[A]) {
+			if (IGPlus_TI_Tick[B] <= IGPlus_TI_Tick[A] || IGPlus_TI_MT[B] <= IGPlus_TI_MT[A])
+				return float(IGPlus_TI_Tick[A]);
+			IGPlus_TI_PaceA = A;
+			IGPlus_TI_PaceAlpha = (Mu - IGPlus_TI_MT[A]) / (IGPlus_TI_MT[B] - IGPlus_TI_MT[A]);
+			return float(IGPlus_TI_Tick[A]) + float(IGPlus_TI_Tick[B] - IGPlus_TI_Tick[A]) * IGPlus_TI_PaceAlpha;
+		}
+	}
+	return float(IGPlus_TI_Tick[(IGPlus_TI_Head - IGPlus_TI_Num) & 15]);
+}
+
+// The spot IGPlus_TI_Pace found, drawn from the two updates and the part of
+// the way between them. The same spot as IGPlus_TI_Sample gives for the tick
+// position, to the precision of a float. With no two updates around the
+// moment (past the newest one, or before the oldest) it is IGPlus_TI_Sample.
+simulated function vector IGPlus_TI_SamplePaced(float TickLen) {
+	local int A, B;
+
+	if (IGPlus_TI_PaceA < 0)
+		return IGPlus_TI_Sample(IGPlus_TI_DrawnR, TickLen, IGPlus_TI_bDrawnHeld);
+	A = IGPlus_TI_PaceA;
+	B = (A + 1) & 15;
+	if (IGPlus_TI_IsJump(IGPlus_TI_Loc[A], IGPlus_TI_Loc[B], IGPlus_TI_Tick[B] - IGPlus_TI_Tick[A], TickLen))
+		return IGPlus_TI_Loc[A];
+	return IGPlus_TI_Loc[A] + (IGPlus_TI_Loc[B] - IGPlus_TI_Loc[A]) * IGPlus_TI_PaceAlpha;
+}
+
 // Where the player was at tick position R: between the two updates around
 // it. Past the newest one they are carried on by its velocity for at most
 // IGPLUS_TI_MAX_CARRY ticks (the next update is on its way), then they stop.
@@ -15280,6 +15456,7 @@ simulated function IGPlus_TI_Stat() {
 	if (IGPlus_TI_bDrawnHeld)
 		IGPlus_TI_StHeld++;
 	IGPlus_TI_StDelaySum += IGPlus_TI_Delay;
+	IGPlus_TI_StDevMax = FMax(IGPlus_TI_StDevMax, Abs(IGPlus_TI_Dev));
 	IGPlus_TI_StDelayMax = FMax(IGPlus_TI_StDelayMax, IGPlus_TI_Delay);
 	IGPlus_TI_StGapMax = FMax(IGPlus_TI_StGapMax, IGPlus_TI_Gap);
 
@@ -15341,6 +15518,7 @@ function IGPlus_TI_LogStats(bool bWrite) {
 				@"gapTicksMax="$IGPlus_Fmt1(P.IGPlus_TI_StGapMax)
 				@"back1="$P.IGPlus_TI_StBack1@"back3="$P.IGPlus_TI_StBack3
 				@"backMax="$IGPlus_Fmt1(P.IGPlus_TI_StBackMax)
+				@"paceMsMax="$IGPlus_Fmt1(1000.0 * P.IGPlus_TI_StDevMax)
 				@"resets="$P.IGPlus_TI_StResets@"clockSnaps="$IGPlus_TI_StClockSnaps
 				@"tickMs="$IGPlus_Fmt1(Ms));
 		}
@@ -15356,6 +15534,7 @@ function IGPlus_TI_LogStats(bool bWrite) {
 		P.IGPlus_TI_StDelayMax = 0.0;
 		P.IGPlus_TI_StGapMax = 0.0;
 		P.IGPlus_TI_StBackMax = 0.0;
+		P.IGPlus_TI_StDevMax = 0.0;
 	}
 	IGPlus_TI_StClockSnaps = 0;
 }
@@ -15426,8 +15605,8 @@ simulated function IGPlus_TI_AnimAfter(float Delay) {
 // the one the server's snapshot of that tick has.
 simulated function IGPlus_TI_After(float DeltaTime) {
 	local bbPlayer LP;
-	local int Full, Prev, Delta;
-	local float Target, TickLen, Newest;
+	local int Full, Prev, Delta, i;
+	local float Target, TickLen, Newest, MoveT;
 
 	if (IGPlus_LocationOffsetFix_Moved == false)
 		return;
@@ -15443,6 +15622,14 @@ simulated function IGPlus_TI_After(float DeltaTime) {
 	if (IGPlus_LocationOffsetFix_WasVelocityReplicated() == false)
 		Velocity = IGPlus_LocationOffsetFix_Velocity;
 
+	TickLen = FMax(LP.IGPlus_TI_TickLen, 0.001);
+	// A dead player is hidden. Their updates from before are dropped: after
+	// the respawn they are drawn from their first update at the new spot,
+	// where the server stands them too (it drops its snapshots at the death).
+	// Kept, the body showed at the death spot for one drawing delay after the
+	// respawn, and could be hit there.
+	if (bHidden)
+		IGPlus_TI_Num = 0;
 	if (IGPlus_TI_bHasByte == false || IGPlus_NetTick != IGPlus_TI_LastByte) {
 		// A move of theirs ran in a new tick: an update.
 		Full = IGPlus_TI_FullTick(IGPlus_NetTick, LP.IGPlus_TI_ServerTick);
@@ -15459,27 +15646,45 @@ simulated function IGPlus_TI_After(float DeltaTime) {
 			else
 				IGPlus_TI_Gap += (float(Delta) - IGPlus_TI_Gap) * 0.02;
 		}
-		if (IGPlus_TI_Num == 0) {
-			IGPlus_TI_Gap = 1.0;
-			IGPlus_TI_Delay = IGPLUS_TI_MIN_DELAY;
-		}
-		IGPlus_TI_Tick[IGPlus_TI_Head & 15] = Full;
-		IGPlus_TI_Loc[IGPlus_TI_Head & 15] = IGPlus_NetLoc;
-		IGPlus_TI_Vel[IGPlus_TI_Head & 15] = Velocity;
-		IGPlus_TI_Duck[IGPlus_TI_Head & 15] = DuckFractionRepl;
-		IGPlus_TI_Head = (IGPlus_TI_Head + 1) & 15;
-		if (IGPlus_TI_Num < 16)
-			IGPlus_TI_Num++;
 		IGPlus_TI_bHasByte = true;
 		IGPlus_TI_LastByte = IGPlus_NetTick;
-		IGPlus_TI_StUpdates++;
-		// Drawn far enough back that the next update is in before it is needed.
-		Target = FClamp(IGPlus_TI_Gap + IGPLUS_TI_EXTRA, IGPLUS_TI_MIN_DELAY, IGPLUS_TI_MAX_DELAY);
-		IGPlus_TI_Delay += FClamp(Target - IGPlus_TI_Delay, -0.02, 0.05);
+		if (bHidden == false) {
+			if (IGPlus_TI_Num == 0) {
+				IGPlus_TI_Gap = 1.0;
+				IGPlus_TI_Delay = IGPLUS_TI_MIN_DELAY;
+				IGPlus_TI_Dev = 0.0;
+				MoveT = 0.0;
+			} else {
+				// How much move time this update is on from the one before, and
+				// how far that leaves it from an even pace (IGPlus_TI_Pace).
+				MoveT = IGPlus_TI_MoveDelta(IGPlus_TI_LastMT, IGPlus_NetMoveT, float(Delta) * TickLen);
+				IGPlus_TI_Dev = (IGPlus_TI_Dev + MoveT - float(Delta) * TickLen) * (1.0 - IGPLUS_TI_PACE_RATE);
+				MoveT += IGPlus_TI_MT[(IGPlus_TI_Head - 1) & 15];
+				// Kept small, so half a millisecond stays exact in a float.
+				if (MoveT > 64.0) {
+					for (i = 0; i < 16; i++)
+						IGPlus_TI_MT[i] -= 64.0;
+					MoveT -= 64.0;
+					IGPlus_TI_Mu -= 64.0;
+				}
+			}
+			IGPlus_TI_LastMT = IGPlus_NetMoveT;
+			IGPlus_TI_MT[IGPlus_TI_Head & 15] = MoveT;
+			IGPlus_TI_Tick[IGPlus_TI_Head & 15] = Full;
+			IGPlus_TI_Loc[IGPlus_TI_Head & 15] = IGPlus_TI_LocJoin(IGPlus_NetLoc, IGPlus_NetLocFrac);
+			IGPlus_TI_Vel[IGPlus_TI_Head & 15] = Velocity;
+			IGPlus_TI_Duck[IGPlus_TI_Head & 15] = DuckFractionRepl;
+			IGPlus_TI_Head = (IGPlus_TI_Head + 1) & 15;
+			if (IGPlus_TI_Num < 16)
+				IGPlus_TI_Num++;
+			IGPlus_TI_StUpdates++;
+			// Drawn far enough back that the next update is in before it is needed.
+			Target = FClamp(IGPlus_TI_Gap + IGPLUS_TI_EXTRA, IGPLUS_TI_MIN_DELAY, IGPLUS_TI_MAX_DELAY);
+			IGPlus_TI_Delay += FClamp(Target - IGPlus_TI_Delay, -0.02, 0.05);
+		}
 	}
 
-	TickLen = FMax(LP.IGPlus_TI_TickLen, 0.001);
-	IGPlus_TI_DrawnR = LP.IGPlus_TI_Clock - IGPlus_TI_Delay;
+	IGPlus_TI_DrawnR = IGPlus_TI_Pace(LP.IGPlus_TI_Clock - IGPlus_TI_Delay, TickLen, DeltaTime);
 	Newest = float(IGPlus_TI_Tick[(IGPlus_TI_Head - 1) & 15]);
 	IGPlus_TI_bDrawnPast = IGPlus_TI_Num > 0 && IGPlus_TI_DrawnR >= Newest;
 	// Adaptive Buffering holds this player still on the server and says so
@@ -15489,9 +15694,18 @@ simulated function IGPlus_TI_After(float DeltaTime) {
 		&& (IGPlus_TI_bDrawnHeld || IGPlus_TI_DrawnR - Newest >= IGPLUS_TI_MAX_CARRY);
 	IGPlus_TI_DrawnDuck = IGPlus_TI_DuckAt(IGPlus_TI_DrawnR);
 	IGPlus_TI_DrawnSpan = IGPlus_TI_SpanAt(IGPlus_TI_DrawnR);
-	bCollideWorld = false;
-	SetLocation(IGPlus_TI_Sample(IGPlus_TI_DrawnR, TickLen, IGPlus_TI_bDrawnHeld));
-	bCollideWorld = true;
+	// With no update to draw from (hidden, or the first one after a respawn
+	// is still on its way) the pawn stays parked outside the map.
+	if (IGPlus_TI_Num > 0) {
+		bCollideWorld = false;
+		SetLocation(IGPlus_TI_SamplePaced(TickLen));
+		bCollideWorld = true;
+	} else if (VSize(Location - IGPlus_LocationOffsetFix_SafeLocation) > 1.0) {
+		// An update of the engine's own has moved the pawn back into the map.
+		bCollideWorld = false;
+		SetLocation(IGPlus_LocationOffsetFix_SafeLocation);
+		bCollideWorld = true;
+	}
 	IGPlus_TI_AnimAfter(IGPlus_TI_Delay * TickLen);
 	if (LP.bDrawDebugData)
 		IGPlus_TI_Stat();

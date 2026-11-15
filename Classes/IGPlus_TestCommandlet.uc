@@ -328,9 +328,27 @@ function TestTickInterp() {
 	// enableDebugData draws nothing on the screen unless the player asks for it.
 	LogTestResult(class'ClientSettings'.default.bShowDebugDataOnScreen == false,
 		"ShowDebugDataOnScreen_starts_off");
-	// The server tests a shot against the spot as the client got it: in whole units.
-	LogTestResult(class'bbPlayer'.static.IGPlus_TI_WireLoc(vect(2317.04,-126.51,-212.2)) == vect(2317,-127,-212),
-		"TickInterp_the_server_rounds_a_spot_as_the_engine_sends_it");
+	// Tick Interpolation: the move time between two updates comes back from the two bytes sent,
+	// also past the 128 ms the byte covers, and for a tick that ran far more move time than one tick is long.
+	LogTestResult(Abs(class'bbPlayer'.static.IGPlus_TI_MoveDelta(class'bbPlayer'.static.IGPlus_TI_MoveByte(100.0000),
+			class'bbPlayer'.static.IGPlus_TI_MoveByte(100.0090), 0.0087) - 0.0090) < 0.0006
+		&& Abs(class'bbPlayer'.static.IGPlus_TI_MoveDelta(class'bbPlayer'.static.IGPlus_TI_MoveByte(100.1200),
+			class'bbPlayer'.static.IGPlus_TI_MoveByte(100.1320), 0.0087) - 0.0120) < 0.0006
+		&& Abs(class'bbPlayer'.static.IGPlus_TI_MoveDelta(class'bbPlayer'.static.IGPlus_TI_MoveByte(50.0000),
+			class'bbPlayer'.static.IGPlus_TI_MoveByte(50.3000), 0.3045) - 0.3000) < 0.0006
+		&& Abs(class'bbPlayer'.static.IGPlus_TI_MoveDelta(class'bbPlayer'.static.IGPlus_TI_MoveByte(50.0000),
+			class'bbPlayer'.static.IGPlus_TI_MoveByte(50.0500), 0.0087) - 0.0500) < 0.0006
+		&& class'bbPlayer'.static.IGPlus_TI_MoveDelta(7, 7, 0.0087) == 0.0,
+		"TickInterp_move_time_between_two_updates_comes_back_from_the_two_bytes");
+	// The server tests a shot against the spot as the client got it: in quarters of a unit,
+	// sent as whole units and one byte of quarters, also below zero.
+	LogTestResult(class'bbPlayer'.static.IGPlus_TI_WireLoc(vect(2317.04,-126.51,-212.2)) == vect(2317,-126.5,-212.25)
+		&& class'bbPlayer'.static.IGPlus_TI_LocWhole(vect(2317,-126.5,-212.25)) == vect(2317,-127,-213)
+		&& class'bbPlayer'.static.IGPlus_TI_LocJoin(class'bbPlayer'.static.IGPlus_TI_LocWhole(vect(2317,-126.5,-212.25)),
+			class'bbPlayer'.static.IGPlus_TI_LocFrac(vect(2317,-126.5,-212.25))) == vect(2317,-126.5,-212.25)
+		&& class'bbPlayer'.static.IGPlus_TI_LocJoin(class'bbPlayer'.static.IGPlus_TI_LocWhole(vect(-0.25,31999.75,-32000)),
+			class'bbPlayer'.static.IGPlus_TI_LocFrac(vect(-0.25,31999.75,-32000))) == vect(-0.25,31999.75,-32000),
+		"TickInterp_the_server_rounds_a_spot_as_the_client_gets_it");
 }
 
 // Where the client's own trace stands another player (bbPlayer.IGPlus_PRTRulePos).
