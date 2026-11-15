@@ -119,6 +119,10 @@ var localized string MoreInformationText;
 	var localized string DebugMovementText;
 	var localized string DebugMovementHelp;
 
+	var UWindowCheckbox Chk_ShowDebugDataOnScreen;
+	var localized string ShowDebugDataOnScreenText;
+	var localized string ShowDebugDataOnScreenHelp;
+
 	var UWindowCheckbox Chk_LocationOffsetFix;
 	var localized string LocationOffsetFixText;
 	var localized string LocationOffsetFixHelp;
@@ -952,6 +956,7 @@ function Created() {
 	Chk_LogClientMessages = CreateCheckbox(LogClientMessagesText, LogClientMessagesHelp);
 	Chk_DemoShowClientMessages = CreateCheckbox(DemoShowClientMessagesText, DemoShowClientMessagesHelp);
 	Chk_DebugMovement = CreateCheckbox(DebugMovementText, DebugMovementHelp);
+	Chk_ShowDebugDataOnScreen = CreateCheckbox(ShowDebugDataOnScreenText, ShowDebugDataOnScreenHelp);
 	Chk_LocationOffsetFix = CreateCheckbox(LocationOffsetFixText, LocationOffsetFixHelp);
 
 	Lbl_NetStats = CreateSeparator(NetStatsText);
@@ -1136,6 +1141,7 @@ function Load() {
 	Chk_LogClientMessages.bChecked = Settings.bLogClientMessages;
 	Chk_DemoShowClientMessages.bChecked = Settings.bDemoShowClientMessages;
 	Chk_DebugMovement.bChecked = Settings.bDebugMovement;
+	Chk_ShowDebugDataOnScreen.bChecked = Settings.bShowDebugDataOnScreen;
 	Chk_LocationOffsetFix.bChecked = Settings.bEnableLocationOffsetFix;
 
 	Chk_EnableNetStats.bChecked = Settings.bEnableNetStats;
@@ -1265,6 +1271,7 @@ function LoadForcedSettings() {
 	LockIfForced(Chk_LogClientMessages, "bLogClientMessages", P);
 	LockIfForced(Chk_DemoShowClientMessages, "bDemoShowClientMessages", P);
 	LockIfForced(Chk_DebugMovement, "bDebugMovement", P);
+	LockIfForced(Chk_ShowDebugDataOnScreen, "bShowDebugDataOnScreen", P);
 	LockIfForced(Chk_LocationOffsetFix, "bEnableLocationOffsetFix", P);
 	LockIfForced(Chk_EnableNetStats, "bEnableNetStats", P);
 	LockIfForced(Chk_NetStatUnconfirmedTime, "bNetStatsUnconfirmedTime", P);
@@ -1362,6 +1369,7 @@ function Save() {
 	Settings.bLogClientMessages = Chk_LogClientMessages.bChecked;
 	Settings.bDemoShowClientMessages = Chk_DemoShowClientMessages.bChecked;
 	Settings.bDebugMovement = Chk_DebugMovement.bChecked;
+	Settings.bShowDebugDataOnScreen = Chk_ShowDebugDataOnScreen.bChecked;
 	Settings.bEnableLocationOffsetFix = Chk_LocationOffsetFix.bChecked;
 
 	Settings.bEnableNetStats = Chk_EnableNetStats.bChecked;
@@ -1578,6 +1586,9 @@ defaultproperties
 
 		DebugMovementText="Trace Movement Input"
 		DebugMovementHelp="If checked, trace movement input to demo"
+
+		ShowDebugDataOnScreenText="Show Debug Data On Screen"
+		ShowDebugDataOnScreenHelp="If checked, enableDebugData 1 also shows the debug data on screen\\nUnchecked, it only goes to the console and to a file in your Logs folder"
 
 		LocationOffsetFixText="Location Offset Fix"
 		LocationOffsetFixHelp="If checked, tries to work around a UT bug that prevents synchronized player locations "

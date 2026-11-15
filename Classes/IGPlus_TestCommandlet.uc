@@ -325,6 +325,9 @@ function TestTickInterp() {
 		&& class'SuperShockRifleBeamEffect'.default.bPlayBeam && class'SuperShockRifleBeamEffect'.default.bPlayRing == false
 		&& class'SuperShockRifleRingEffect'.default.bPlayRing && class'SuperShockRifleRingEffect'.default.bPlayBeam == false,
 		"HitEffectSource_starts_on_client_and_the_two_effect_halves_are_split");
+	// enableDebugData draws nothing on the screen unless the player asks for it.
+	LogTestResult(class'ClientSettings'.default.bShowDebugDataOnScreen == false,
+		"ShowDebugDataOnScreen_starts_off");
 	// The server tests a shot against the spot as the client got it: in whole units.
 	LogTestResult(class'bbPlayer'.static.IGPlus_TI_WireLoc(vect(2317.04,-126.51,-212.2)) == vect(2317,-127,-212),
 		"TickInterp_the_server_rounds_a_spot_as_the_engine_sends_it");

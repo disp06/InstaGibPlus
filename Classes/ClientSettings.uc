@@ -65,6 +65,7 @@ var config bool   bNoOwnFootsteps;
 var config bool   bLogClientMessages;
 var config bool   bDemoShowClientMessages;
 var config bool   bDebugMovement;
+var config bool   bShowDebugDataOnScreen; // enableDebugData 1: also draw the debug block and the debug lines on the HUD
 var config bool   bEnableKillCam;
 var config float  FakeCAPInterval; // Send a FakeCAP after no CAP has been sent for this amount of time
 var config bool   bCameraCorrectionSmoothing; // Apply corrections to the simulation at once, ease only the camera
@@ -402,6 +403,7 @@ simulated function string DumpSettings() {
 		GetSetting("bLogClientMessages")$
 		GetSetting("bDemoShowClientMessages")$
 		GetSetting("bDebugMovement")$
+		GetSetting("bShowDebugDataOnScreen")$
 		GetSetting("bEnableKillCam")$
 		GetSetting("FakeCAPInterval")$
 		GetSetting("bCameraCorrectionSmoothing")$
@@ -512,6 +514,7 @@ defaultproperties
 	bLogClientMessages=True
 	bDemoShowClientMessages=False
 	bDebugMovement=False
+	bShowDebugDataOnScreen=False
 	bEnableKillCam=False
 	FakeCAPInterval=0.1
 	bCameraCorrectionSmoothing=False

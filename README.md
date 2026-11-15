@@ -83,6 +83,7 @@ These settings can be found in **InstaGibPlus.ini** under section **\[ClientSett
 1. [bLogClientMessages](#blogclientmessages)
 1. [bDemoShowClientMessages](#bdemoshowclientmessages)
 1. [bDebugMovement](#bdebugmovement)
+1. [bShowDebugDataOnScreen](#bshowdebugdataonscreen)
 1. [bEnableKillCam](#benablekillcam)
 1. [MinDodgeClickTime](#mindodgeclicktime)
 1. [bUseOldMouseInput](#buseoldmouseinput)
@@ -539,6 +540,17 @@ If `False`, ClientMessages are hidden while playing demos.
 
 Causes IG+ to write movement debugging events to console/demo, depending on whether debug data is enabled at the moment (see [EnableDebugData](#enabledebugdata))
 
+## bShowDebugDataOnScreen
+**Type: bool**  
+**Default: False**  
+
+Decides whether debug data shows on your screen while it is on (see [EnableDebugData](#enabledebugdata)).
+
+If `False`, the screen stays as it is. You get one line when you turn debug data on and one line when you turn it off. The debug lines still go to the console and to the debug log file.  
+If `True`, the HUD shows the debug values and the message area shows the debug lines.
+
+In the IG+ menu this is `Show Debug Data On Screen`, under `Advanced`.
+
 ## bEnableKillCam
 **Type: bool**  
 **Default: False**  
@@ -986,7 +998,9 @@ Parameters marked `optional` do not have to be supplied.
 ## EnableDebugData
 **Parameters: (bool b)**  
 
-Displays a variety of useful debugging information on screen. While on, the debug lines are also written to a new file in your UT Logs folder, named IGPlusDebug_\<date\>_\<time\>.log. Turning it off closes the file.
+Collects debugging information about your own game. `EnableDebugData 1` turns it on and `EnableDebugData 0` turns it off. Each prints one line that confirms it and names the log file.
+
+While on, the debug lines are written to the console and to a new file in your UT Logs folder, named IGPlusDebug_\<date\>_\<time\>.log. Turning it off closes the file. Nothing else shows on screen unless you turn on [bShowDebugDataOnScreen](#bshowdebugdataonscreen).
 ## EnableHitSound
 **Parameters: (bool b)**
 
@@ -2192,7 +2206,7 @@ If enabled, the rewound position is interpolated between the two snapshots aroun
 **Type: bool**  
 **Default: False** (True in NextIG and NextSA)  
 
-If enabled, a hitscan shot rewinds the other players to the moment the shooter's screen showed them, instead of guessing from the shooter's average ping. The server tells each player the server time of every update it sends. A shot then carries the update the shooter's screen showed and how long the screen had been moving players forward past it. The server places every player the same way: at their snapshot from that update, carried forward by their velocity for the same time. Network jitter, the wait for the server's next tick and ping changes stop moving the rewound players. It doesn't need bEnableSubTickCompensation. With bEnableWarpFix on, a player whose packets stalled for longer than WarpFixDelay stays where clients hold them. Shots traced later in the tick than the moves arrive (minigun, pulse beam, enforcer refire) use the same report. If the shot's rewind is above PingCompensationMax, or differs from the server's own ping measurement by more than PreciseRewindTimeMaxDeviationMs, the shot uses the old rewind. Needs bEnablePingCompensation and bEnableInputReplication off. Not used for a player with snapshot interpolation. Console `enableDebugData 1` shows a line per hitscan shot: the rewind used, the old rewind and how far the change moved the players.
+If enabled, a hitscan shot rewinds the other players to the moment the shooter's screen showed them, instead of guessing from the shooter's average ping. The server tells each player the server time of every update it sends. A shot then carries the update the shooter's screen showed and how long the screen had been moving players forward past it. The server places every player the same way: at their snapshot from that update, carried forward by their velocity for the same time. Network jitter, the wait for the server's next tick and ping changes stop moving the rewound players. It doesn't need bEnableSubTickCompensation. With bEnableWarpFix on, a player whose packets stalled for longer than WarpFixDelay stays where clients hold them. Shots traced later in the tick than the moves arrive (minigun, pulse beam, enforcer refire) use the same report. If the shot's rewind is above PingCompensationMax, or differs from the server's own ping measurement by more than PreciseRewindTimeMaxDeviationMs, the shot uses the old rewind. Needs bEnablePingCompensation and bEnableInputReplication off. Not used for a player with snapshot interpolation. Console `enableDebugData 1` writes a line per hitscan shot: the rewind used, the old rewind and how far the change moved the players.
 
 ## PreciseRewindTimeMaxDeviationMs
 
@@ -2367,7 +2381,7 @@ When a match ends or a player leaves, the server writes one `[DET-SUMMARY]` line
 
 The single lines behind the shot and switch counts are only written while [TraceInput](#traceinput) is on for that player.
 
-Every shot counted in `hitClientOnly`, `hitServerOnly`, `hitDrawnDiff` or `deadShots` also writes one `[DET-HIT]` line. Its first word says which: `clientOnly`, `serverOnly`, `drawnOnly` (only the drawn players were hit), `drawnMissed` (only the drawn players were missed) or `deadShot`. It names the weapon, the nearest player on the server's line, the distance to that player and that player's speed, the rewind used and the shooter's ping. For a `clientOnly` line, `gapXY` and `gapZ` say by how many units the server's line passed that player's rewound body, and `blocked=True` means something solid was in between. `eyeDiff` is the shooter's eye height minus the server's own for that shot. A shooter with `enableDebugData 1` gets the same line on screen.
+Every shot counted in `hitClientOnly`, `hitServerOnly`, `hitDrawnDiff` or `deadShots` also writes one `[DET-HIT]` line. Its first word says which: `clientOnly`, `serverOnly`, `drawnOnly` (only the drawn players were hit), `drawnMissed` (only the drawn players were missed) or `deadShot`. It names the weapon, the nearest player on the server's line, the distance to that player and that player's speed, the rewind used and the shooter's ping. For a `clientOnly` line, `gapXY` and `gapZ` say by how many units the server's line passed that player's rewound body, and `blocked=True` means something solid was in between. `eyeDiff` is the shooter's eye height minus the server's own for that shot. A shooter with `enableDebugData 1` gets the same line in the debug log.
 
 A player with `enableDebugData 1` also gets lines about their own movement, to show why the server corrected their position:
 

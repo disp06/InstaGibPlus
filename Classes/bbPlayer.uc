@@ -2659,6 +2659,8 @@ simulated function IGPlus_MoveDebug(string What) {
 }
 
 function ClientDebugMessage(coerce string S, optional name Type, optional bool bBeep) {
+	local HUD H;
+
 	if (Level.NetMode == NM_DedicatedServer || Role < ROLE_AutonomousProxy)
 		return;
 
@@ -2666,7 +2668,15 @@ function ClientDebugMessage(coerce string S, optional name Type, optional bool b
 		Type = 'IGPlusDebug';
 
 	if (bDrawDebugData) {
+		// The console, UnrealTournament.log and the debug log file get every
+		// line. The message area of the HUD only gets it with
+		// bShowDebugDataOnScreen: without a HUD, ClientMessage skips that part
+		// and does the rest as always.
+		H = myHUD;
+		if (Settings != none && Settings.bShowDebugDataOnScreen == false)
+			myHUD = none;
 		ClientMessage("["$IGPlus_FrameCount@Level.TimeSeconds$"] "$S, Type, bBeep);
+		myHUD = H;
 		if (Level.NetMode != NM_DedicatedServer) {
 			if (IGPlus_DebugLogFile == none)
 				IGPlus_DebugLogFile = Spawn(class'IGPlus_DebugLogFile');
@@ -10772,6 +10782,9 @@ function string forcedModelToString(int fm) {
 	}
 }
 
+// Debug data on or off, with one line to confirm it. On collects the debug
+// lines and writes them to the console and to a file in Logs. The screen only
+// shows them with ClientSettings.bShowDebugDataOnScreen.
 exec function enableDebugData(bool b) {
 	bDrawDebugData = b;
 	if (b) {
@@ -10779,7 +10792,7 @@ exec function enableDebugData(bool b) {
 			IGPlus_DebugLogFile = Spawn(class'IGPlus_DebugLogFile');
 		if (IGPlus_DebugLogFile != none) {
 			IGPlus_DebugLogFile.StartLog();
-			ClientMessage("Debug data: on, also written to Logs/"$IGPlus_DebugLogFile.FileName$".log");
+			ClientMessage("Debug data: on, written to Logs/"$IGPlus_DebugLogFile.FileName$".log");
 		} else {
 			ClientMessage("Debug data: on");
 		}
@@ -16559,7 +16572,7 @@ event PostRender( canvas zzCanvas )
 		}
 	}
 
-	if (bDrawDebugData) {
+	if (bDrawDebugData && Settings.bShowDebugDataOnScreen) {
 		xxDrawDebugData(zzCanvas, 10, 120);
 	}
 
