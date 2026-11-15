@@ -145,7 +145,9 @@ struct CrosshairLayerDescr {
 	var() config bool   bUse;
 };
 var config bool bUseCrosshairFactory;
-var config CrosshairLayerDescr CrosshairLayers[10];
+var config CrosshairLayerDescr CrosshairLayers[10]; // the picked preset: what is drawn and what the Crosshair Factory edits
+var config int CrosshairPreset; // the slot of the picked preset, 0 to 15
+var IGPlus_CrosshairPreset CrosshairPresets[16];
 var CrosshairLayer BottomLayer;
 var CrosshairLayer TopLayer;
 
@@ -176,25 +178,158 @@ simulated function AppendLayer(CrosshairLayer L) {
 	}
 }
 
-simulated function CreateCrosshairLayers() {
-	local int i;
+simulated function CrosshairLayer MakeCrosshairLayer(CrosshairLayerDescr D) {
 	local CrosshairLayer L;
 
+	L = new(none) class'CrosshairLayer';
+	if (D.Texture != "")
+		L.Texture = Texture(DynamicLoadObject(D.Texture, class'Texture'));
+	L.OffsetX = D.OffsetX;
+	L.OffsetY = D.OffsetY;
+	L.ScaleX = D.ScaleX;
+	L.ScaleY = D.ScaleY;
+	L.Color = D.Color;
+	L.Style = Max(1, D.Style);
+	L.bSmooth = D.bSmooth;
+	return L;
+}
+
+simulated function CreateCrosshairLayers() {
+	local int i;
+
+	BottomLayer = none;
+	TopLayer = none;
+
+	for (i = 0; i < arraycount(CrosshairLayers); i++)
+		if (CrosshairLayers[i].bUse)
+			AppendLayer(MakeCrosshairLayer(CrosshairLayers[i]));
+}
+
+// Crosshair presets. CrosshairLayers stays what is drawn, so an older IG+
+// version on another server, which reads the same ini, draws the picked
+// crosshair too. Every preset also has its own section in the ini, and
+// picking one copies its layers into CrosshairLayers.
+simulated function LoadCrosshairPresets() {
+	local int i;
+	local StringUtils SU;
+
+	SU = class'StringUtils'.static.Instance();
+	for (i = 0; i < arraycount(CrosshairPresets); i++)
+		CrosshairPresets[i] = new(Outer, SU.StringToName("CrosshairPreset"$(i + 1))) class'IGPlus_CrosshairPreset';
+
+	// A player from before the presets has their crosshair in CrosshairLayers
+	// and CrosshairPreset 0: it becomes the first preset here. Nothing is
+	// written to the ini until the player saves, adds, picks or deletes a
+	// preset, so a dedicated server's ini gets no preset section.
+	CrosshairPreset = Clamp(CrosshairPreset, 0, arraycount(CrosshairPresets) - 1);
+	CopyLayersToCrosshairPreset();
+}
+
+// CrosshairLayers into the picked preset, which gets a name if it has none.
+simulated function CopyLayersToCrosshairPreset(optional string NewName) {
+	local int i;
+	local IGPlus_CrosshairPreset P;
+
+	P = CrosshairPresets[CrosshairPreset];
+	if (NewName != "")
+		P.PresetName = NewName;
+	else if (P.PresetName == "")
+		P.PresetName = "Crosshair"@(CrosshairPreset + 1);
+	for (i = 0; i < arraycount(CrosshairLayers); i++)
+		P.SetLayer(i, CrosshairLayers[i]);
+}
+
+// The same, and into the picked preset's own section of the ini.
+simulated function StoreCrosshairPreset(optional string NewName) {
+	CopyLayersToCrosshairPreset(NewName);
+	CrosshairPresets[CrosshairPreset].SaveConfig();
+}
+
+// The name of the preset in a slot, empty for a free slot.
+simulated function string GetCrosshairPresetName(int Slot) {
+	if (Slot < 0 || Slot >= arraycount(CrosshairPresets))
+		return "";
+	return CrosshairPresets[Slot].PresetName;
+}
+
+// A preset's layers as drawn layers, bottom first, for its picture in the
+// Crosshair Factory.
+simulated function CrosshairLayer CreateCrosshairPresetLayers(int Slot) {
+	local int i;
+	local CrosshairLayerDescr D;
+	local CrosshairLayer First, Last, L;
+
 	for (i = 0; i < arraycount(CrosshairLayers); i++) {
-		if (CrosshairLayers[i].bUse) {
-			L = new(none) class'CrosshairLayer';
-			if (CrosshairLayers[i].Texture != "")
-				L.Texture = Texture(DynamicLoadObject(CrosshairLayers[i].Texture, class'Texture'));
-			L.OffsetX = CrosshairLayers[i].OffsetX;
-			L.OffsetY = CrosshairLayers[i].OffsetY;
-			L.ScaleX = CrosshairLayers[i].ScaleX;
-			L.ScaleY = CrosshairLayers[i].ScaleY;
-			L.Color = CrosshairLayers[i].Color;
-			L.Style = Max(1, CrosshairLayers[i].Style);
-			L.bSmooth = CrosshairLayers[i].bSmooth;
-			AppendLayer(L);
-		}
+		D = CrosshairPresets[Slot].GetLayer(i);
+		if (D.bUse == false)
+			continue;
+		L = MakeCrosshairLayer(D);
+		if (First == none)
+			First = L;
+		else
+			Last.Next = L;
+		Last = L;
 	}
+	return First;
+}
+
+// A preset's layers into CrosshairLayers.
+simulated function UseCrosshairPreset(int Slot) {
+	local int i;
+
+	CrosshairPreset = Slot;
+	for (i = 0; i < arraycount(CrosshairLayers); i++)
+		CrosshairLayers[i] = CrosshairPresets[Slot].GetLayer(i);
+	CreateCrosshairLayers();
+	SaveConfig();
+}
+
+// Draws another preset from now on. What CrosshairLayers held goes back to
+// its own preset first, since an older IG+ version edits it there.
+simulated function PickCrosshairPreset(int Slot) {
+	if (Slot == CrosshairPreset || GetCrosshairPresetName(Slot) == "")
+		return;
+	StoreCrosshairPreset();
+	UseCrosshairPreset(Slot);
+}
+
+// A new preset in the first free slot, picked, as a copy of the one picked
+// before. False when all slots are taken.
+simulated function bool NewCrosshairPreset() {
+	local int i;
+
+	for (i = 0; i < arraycount(CrosshairPresets); i++)
+		if (CrosshairPresets[i].PresetName == "") {
+			StoreCrosshairPreset();
+			CrosshairPreset = i;
+			StoreCrosshairPreset();
+			SaveConfig();
+			return true;
+		}
+	return false;
+}
+
+// Deletes the picked preset and picks the first one left. False for the last
+// preset, which stays.
+simulated function bool DeleteCrosshairPreset() {
+	local int i, Next;
+	local CrosshairLayerDescr Empty;
+	local IGPlus_CrosshairPreset P;
+
+	Next = -1;
+	for (i = arraycount(CrosshairPresets) - 1; i >= 0; i--)
+		if (i != CrosshairPreset && CrosshairPresets[i].PresetName != "")
+			Next = i;
+	if (Next < 0)
+		return false;
+
+	P = CrosshairPresets[CrosshairPreset];
+	P.PresetName = "";
+	for (i = 0; i < arraycount(CrosshairLayers); i++)
+		P.SetLayer(i, Empty);
+	P.SaveConfig();
+	UseCrosshairPreset(Next);
+	return true;
 }
 
 simulated function LoadHitSounds() {
@@ -213,6 +348,7 @@ simulated function LoadHitSounds() {
 
 simulated function CheckConfig() {
 	LoadHitSounds();
+	LoadCrosshairPresets();
 	CreateCrosshairLayers();
 
 	if (FPSCounterSmoothingStrength <= 0)
@@ -273,6 +409,32 @@ simulated function string DumpCrosshairLayers() {
 	for (i = 0; i < arraycount(CrosshairLayers); i++)
 		if (CrosshairLayers[i].bUse)
 			Result = Result$"CrosshairLayers["$i$"]:"@DumpCrosshairLayer(CrosshairLayers[i])$Chr(10);
+
+	return Result;
+}
+
+// The presets: one line for each with its name, then the layers of every
+// preset that is not picked. The picked one's are CrosshairLayers above.
+simulated function string DumpCrosshairPresets() {
+	local int i, j;
+	local string Result;
+	local IGPlus_CrosshairPreset P;
+	local CrosshairLayerDescr L;
+
+	Result = "";
+	for (i = 0; i < arraycount(CrosshairPresets); i++) {
+		P = CrosshairPresets[i];
+		if (P == none || P.PresetName == "")
+			continue;
+		Result = Result$"CrosshairPresets["$i$"]:"@P.PresetName$Chr(10);
+		if (i == CrosshairPreset)
+			continue;
+		for (j = 0; j < arraycount(CrosshairLayers); j++) {
+			L = P.GetLayer(j);
+			if (L.bUse)
+				Result = Result$"CrosshairPresets["$i$"].Layers["$j$"]:"@DumpCrosshairLayer(L)$Chr(10);
+		}
+	}
 
 	return Result;
 }
@@ -455,6 +617,7 @@ simulated function string DumpSettings() {
 		GetSetting("HitMarkerDecayExponent")$
 		GetSetting("HitMarkerSource")$
 		GetSetting("bUseCrosshairFactory")$
+		GetSetting("CrosshairPreset")$
 		GetSetting("bBioUseClientSideAnimations")$
 		GetSetting("bShockBeamUseClientSideAnimations")$
 		GetSetting("bShockProjectileUseClientSideAnimations")$
@@ -465,7 +628,8 @@ simulated function string DumpSettings() {
 		GetSetting("bRocketUseClientSideAnimations")$
 		GetSetting("bSniperUseClientSideAnimations")$
 		GetSetting("bTranslocatorUseClientSideAnimations")$
-		DumpCrosshairLayers();
+		DumpCrosshairLayers()$
+		DumpCrosshairPresets();
 }
 
 defaultproperties

@@ -363,6 +363,78 @@ function TestPRTRulePos() {
 		"LineCylinderGap_above");
 }
 
+// The crosshair presets of ClientSettings, on a settings object of its own.
+// It saves to IGPlusTest.ini, not to a player's InstaGibPlus.ini.
+function TestCrosshairPresets() {
+	local Object Helper;
+	local ClientSettings S;
+	local string Dump;
+	local int i;
+	local bool bOK;
+
+	Helper = new(none, 'IGPlusTest') class'Object';
+	S = new(Helper, 'ClientSettings') class'ClientSettings';
+
+	// A player from before the presets: one crosshair, no preset yet.
+	S.CrosshairPreset = 0;
+	S.SetCrosshairLayerUse(0, true);
+	S.SetCrosshairLayerScaleX(0, 3);
+	S.LoadCrosshairPresets();
+	for (i = 0; i < arraycount(S.CrosshairPresets); i++) { // (what an earlier run saved)
+		S.CrosshairPresets[i].PresetName = "";
+		S.CrosshairPresets[i].SaveConfig();
+	}
+	S.CopyLayersToCrosshairPreset();
+	S.CreateCrosshairLayers();
+	LogTestResult(S.GetCrosshairPresetName(0) == "Crosshair 1" && S.CrosshairPresets[0].GetLayer(0).ScaleX == 3
+		&& S.GetCrosshairPresetName(1) == "" && S.BottomLayer != None && S.BottomLayer.ScaleX == 3,
+		"CrosshairPresets_the_old_crosshair_is_the_first_preset");
+
+	bOK = S.NewCrosshairPreset() && S.CrosshairPreset == 1 && S.GetCrosshairPresetName(1) == "Crosshair 2"
+		&& S.CrosshairPresets[1].GetLayer(0).ScaleX == 3;
+	S.SetCrosshairLayerScaleX(0, 7);
+	S.StoreCrosshairPreset("Dot");
+	LogTestResult(bOK && S.GetCrosshairPresetName(1) == "Dot" && S.CrosshairPresets[1].GetLayer(0).ScaleX == 7
+		&& S.CrosshairPresets[0].GetLayer(0).ScaleX == 3,
+		"CrosshairPresets_a_new_preset_is_a_copy_and_a_save_changes_only_the_picked_one");
+
+	S.PickCrosshairPreset(0);
+	bOK = S.CrosshairPreset == 0 && S.GetCrosshairLayer(0).ScaleX == 3 && S.BottomLayer.ScaleX == 3;
+	S.PickCrosshairPreset(5); // a free slot
+	bOK = bOK && S.CrosshairPreset == 0;
+	Dump = S.DumpCrosshairPresets();
+	bOK = bOK && InStr(Dump, "CrosshairPresets[0]: Crosshair 1") >= 0 && InStr(Dump, "CrosshairPresets[1]: Dot") >= 0
+		&& InStr(Dump, "CrosshairPresets[1].Layers[0]: (") >= 0 && InStr(Dump, "CrosshairPresets[0].Layers") < 0;
+	S.PickCrosshairPreset(1);
+	LogTestResult(bOK && S.CrosshairPreset == 1 && S.GetCrosshairLayer(0).ScaleX == 7 && S.BottomLayer.ScaleX == 7,
+		"CrosshairPresets_picking_one_draws_its_layers_and_the_dump_lists_them");
+
+	// An older IG+ version edits CrosshairLayers and knows no presets.
+	S.SetCrosshairLayerScaleX(0, 9);
+	S.PickCrosshairPreset(0);
+	LogTestResult(S.CrosshairPresets[1].GetLayer(0).ScaleX == 9 && S.GetCrosshairLayer(0).ScaleX == 3,
+		"CrosshairPresets_layers_changed_elsewhere_go_back_to_their_preset_on_a_switch");
+
+	// As after a restart: everything is read from the ini again.
+	S = new(Helper, 'ClientSettings') class'ClientSettings';
+	S.LoadCrosshairPresets();
+	LogTestResult(S.CrosshairPreset == 0 && S.GetCrosshairLayer(0).ScaleX == 3 && S.GetCrosshairPresetName(0) == "Crosshair 1"
+		&& S.GetCrosshairPresetName(1) == "Dot" && S.CrosshairPresets[1].GetLayer(0).ScaleX == 9,
+		"CrosshairPresets_are_read_back_from_the_ini");
+
+	S.PickCrosshairPreset(1);
+	bOK = S.DeleteCrosshairPreset() && S.CrosshairPreset == 0 && S.GetCrosshairPresetName(1) == ""
+		&& S.GetCrosshairLayer(0).ScaleX == 3;
+	LogTestResult(bOK && S.DeleteCrosshairPreset() == false && S.GetCrosshairPresetName(0) == "Crosshair 1",
+		"CrosshairPresets_a_delete_picks_the_first_one_left_and_the_last_one_stays");
+
+	bOK = true;
+	for (i = 1; i < arraycount(S.CrosshairPresets); i++)
+		bOK = bOK && S.NewCrosshairPreset();
+	LogTestResult(bOK && S.NewCrosshairPreset() == false && S.CrosshairPreset == 15 && S.GetCrosshairPresetName(15) == "Crosshair 16",
+		"CrosshairPresets_sixteen_slots");
+}
+
 event int main(string Params) {
 	TestDataBuffer();
 	TestDetEffectiveAnimTime();
@@ -374,5 +446,6 @@ event int main(string Params) {
 	TestPRTRulePos();
 	TestFireOrder();
 	TestTickInterp();
+	TestCrosshairPresets();
 	return 0;
 }

@@ -10,6 +10,15 @@ var IGPlus_Button Btn_RemLayer;
 var IGPlus_CrosshairLayersListBox LB_Layers;
 var UWindowList LastSelected;
 
+// Presets: the list, + for a new one, - to delete the picked one, and its name.
+var IGPlus_Button Btn_AddPreset;
+var IGPlus_Button Btn_RemPreset;
+var IGPlus_Label Lbl_Presets;
+var localized string PresetsText;
+var IGPlus_CrosshairPresetsListBox LB_Presets;
+var IGPlus_EditControl Edit_PresetName;
+var localized string PresetNameText;
+
 var IGPlus_Label Lbl_Scale;
 var localized string ScaleText;
 var IGPlus_BtnUp Btn_ScaleUp;
@@ -143,14 +152,51 @@ function Save() {
 		i++;
 	}
 
-	Settings.BottomLayer = none;
-	Settings.TopLayer = none;
 	Settings.CreateCrosshairLayers();
+	Settings.StoreCrosshairPreset(Edit_PresetName.GetValue());
+	Settings.SaveConfig();
+}
+
+// The list of presets, with the picked one selected and its name in the box.
+function LoadPresets() {
+	local int i;
+	local string PresetName;
+	local IGPlus_CrosshairPresetsListItem Item;
+
+	if (Settings == none)
+		return;
+
+	bUpdatingControls = true;
+	LB_Presets.Items.Clear();
+	LB_Presets.SelectedItem = none;
+	for (i = 0; i < arraycount(Settings.CrosshairPresets); ++i) {
+		PresetName = Settings.GetCrosshairPresetName(i);
+		if (PresetName == "")
+			continue;
+
+		Item = IGPlus_CrosshairPresetsListItem(LB_Presets.Items.CreateItem(LB_Presets.ListClass));
+		if (Item == none)
+			continue;
+
+		Item.Slot = i;
+		Item.PresetName = PresetName;
+		Item.Layers = Settings.CreateCrosshairPresetLayers(i);
+		LB_Presets.Items.AppendItem(Item);
+
+		if (i == Settings.CrosshairPreset) {
+			LB_Presets.SetSelectedItem(Item);
+			Edit_PresetName.SetValue(PresetName);
+		}
+	}
+	bUpdatingControls = false;
 }
 
 function Load() {
 	LB_Layers.Items.Clear();
+	LB_Layers.SelectedItem = none;
+	LastSelected = none;
 	CopyCrosshairLayers();
+	LoadPresets();
 }
 
 function Created() {
@@ -305,8 +351,33 @@ function Created() {
 	Chk_Smooth.SetFont(F_Normal);
 	Chk_Smooth.Align = TA_Left;
 
-	Btn_Close = UWindowSmallCloseButton(CreateControl(class'UWindowSmallCloseButton', 394, 430, 32, 16));
-	Btn_Save = UWindowSmallButton(CreateControl(class'UWindowSmallButton', 358, 430, 32, 16));
+	Btn_AddPreset = IGPlus_Button(CreateControl(class'IGPlus_Button', 436, 10, 16, 16));
+	Btn_AddPreset.SetText("+");
+	Btn_RemPreset = IGPlus_Button(CreateControl(class'IGPlus_Button', 456, 10, 16, 16));
+	Btn_RemPreset.SetText("-");
+
+	Lbl_Presets = IGPlus_Label(CreateControl(class'IGPlus_Label', 480, 10, 106, 16));
+	Lbl_Presets.SetText(PresetsText);
+	Lbl_Presets.SetHelpText("");
+	Lbl_Presets.SetFont(F_Normal);
+	Lbl_Presets.Align = TA_Left;
+
+	LB_Presets = IGPlus_CrosshairPresetsListBox(CreateControl(class'IGPlus_CrosshairPresetsListBox', 436, 30, 150, 374));
+	LB_Presets.BackgroundBrightness = ParentDialog.BackgroundBrightness;
+
+	Edit_PresetName = IGPlus_EditControl(CreateControl(class'IGPlus_EditControl', 436, 408, 150, 16));
+	Edit_PresetName.SetText(PresetNameText);
+	Edit_PresetName.SetFont(F_Normal);
+	Edit_PresetName.Align = TA_Left;
+	Edit_PresetName.SetDelayedNotify(true);
+	Edit_PresetName.SetNumericOnly(false);
+	Edit_PresetName.SetNumericFloat(false);
+	Edit_PresetName.SetMaxLength(32);
+	Edit_PresetName.EditBoxWidthFraction = (3.0/4.0);
+	Edit_PresetName.EditBoxWidth = 112;
+
+	Btn_Close = UWindowSmallCloseButton(CreateControl(class'UWindowSmallCloseButton', 554, 430, 32, 16));
+	Btn_Save = UWindowSmallButton(CreateControl(class'UWindowSmallButton', 518, 430, 32, 16));
 	Btn_Save.SetText(class'IGPlus_SettingsScroll'.default.SaveButtonText);
 }
 
@@ -383,6 +454,8 @@ function FillControlsFor(IGPlus_CrosshairLayersListItem L) {
 }
 
 function Notify(UWindowDialogControl C, byte E) {
+	local int Slot;
+
 	if (bUpdatingControls)
 		return;
 
@@ -391,6 +464,21 @@ function Notify(UWindowDialogControl C, byte E) {
 			AddLayer();
 		} else if (C == Btn_RemLayer && Btn_RemLayer.bDisabled == false) {
 			RemLayer();
+		} else if (C == Btn_AddPreset && Btn_AddPreset.bDisabled == false) {
+			// The new preset is a copy. The layers shown stay as they are,
+			// and Save writes them into the new preset.
+			if (Settings.NewCrosshairPreset())
+				LoadPresets();
+		} else if (C == Btn_RemPreset && Btn_RemPreset.bDisabled == false) {
+			if (Settings.DeleteCrosshairPreset())
+				Load();
+		} else if (C == LB_Presets && LB_Presets.SelectedItem != none) {
+			// Another preset: drawn in the game from this click on.
+			Slot = IGPlus_CrosshairPresetsListItem(LB_Presets.SelectedItem).Slot;
+			if (Slot != Settings.CrosshairPreset) {
+				Settings.PickCrosshairPreset(Slot);
+				Load();
+			}
 		} else if (C == Btn_ScaleUp && Btn_ScaleUp.bDisabled == false) {
 			IGPlus_CrosshairLayersListItem(LB_Layers.SelectedItem).ScaleY += 1;
 			bUpdatingControls = true;
@@ -479,6 +567,9 @@ function BeforePaint(Canvas C, float X, float Y) {
 
 	Btn_AddLayer.bDisabled = LB_Layers.Items.Count() >= 10;
 	Btn_RemLayer.bDisabled = (LB_Layers.Items.Count() <= 0 || HaveNoSelectedItem);
+
+	Btn_AddPreset.bDisabled = LB_Presets.Items.Count() >= 16;
+	Btn_RemPreset.bDisabled = LB_Presets.Items.Count() <= 1;
 
 	Btn_ScaleUp.bDisabled = HaveNoSelectedItem;
 	Btn_ScaleDown.bDisabled = HaveNoSelectedItem;
@@ -622,4 +713,7 @@ defaultproperties {
 	StyleModulated="Modulated"
 
 	SmoothText="Smooth"
+
+	PresetsText="Presets"
+	PresetNameText="Name"
 }

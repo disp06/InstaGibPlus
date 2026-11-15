@@ -39,8 +39,8 @@ defaultproperties
 	WindowTitle="IG+ Crosshair Factory Settings"
 	bSizable=False
 	bStatusBar=False
-	WinWidth=442
+	WinWidth=602
 	WinHeight=476
-	MinWinWidth=442
+	MinWinWidth=602
 	MinWinHeight=476
 }

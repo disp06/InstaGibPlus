@@ -125,6 +125,7 @@ These settings can be found in **InstaGibPlus.ini** under section **\[ClientSett
 1. [HitMarkerSource](#hitmarkersource)
 1. [bUseCrosshairFactory](#busecrosshairfactory)
 1. [CrosshairLayers](#crosshairlayers)
+1. [CrosshairPreset](#crosshairpreset)
 1. [bBioUseClientSideAnimations](#bbiouseclientsideanimations)
 1. [bShockBeamUseClientSideAnimations](#bshockbeamuseclientsideanimations)
 1. [bShockProjectileUseClientSideAnimations](#bshockprojectileuseclientsideanimations)
@@ -857,6 +858,26 @@ A crosshair is made up of individual images that are drawn in a specific order p
     * 4 (`STY_Modulated`) - ?
 * `bSmooth` controls whether sharp edges should be smoothed out when `ScaleX` or `ScaleY` are greater than 1
 * `bUse` controls whether this layer should be drawn, `True` to draw, `False` to ignore
+
+`CrosshairLayers` holds the layers of the picked preset, see [CrosshairPreset](#crosshairpreset).
+
+## CrosshairPreset
+**Type: int**  
+**Default: 0**  
+
+The Crosshair Factory keeps up to 16 crosshairs, called presets. `CrosshairPreset` is the slot of the picked preset, from 0 to 15. The picked preset is the crosshair the game draws, and its layers are [CrosshairLayers](#crosshairlayers).
+
+In the Crosshair Factory window the presets are in the list on the right, each with a small picture and its name.
+
+* Click a preset to pick it. The game draws it from that click on.
+* `+` makes a new preset. It starts as a copy of the picked one and becomes the picked one.
+* `-` deletes the picked preset. You can not delete the last preset.
+* `Name` is the name of the picked preset.
+* `Save` writes the layers and the name into the picked preset. If you pick another preset before you save, your changes to the layers are gone.
+
+A crosshair you made before presets existed is your first preset, named `Crosshair 1`.
+
+Every preset has its own section in InstaGibPlus.ini, `[CrosshairPreset1]` to `[CrosshairPreset16]`, with `PresetName` and ten `Layers` in the format of [CrosshairLayers](#crosshairlayers). An empty `PresetName` means the slot is free. The picked preset is read from `CrosshairLayers` in `[ClientSettings]`. If you change it by hand, change it there and not in its own section. An older IG+ version on another server reads the same file and draws `CrosshairLayers`, so it draws the picked preset too.
 
 ## bBioUseClientSideAnimations
 **Type: bool**  
