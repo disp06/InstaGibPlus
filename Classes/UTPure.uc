@@ -698,8 +698,10 @@ function CompensateFor(int Ping, optional Pawn Instigator, optional bool bHitsca
 	local vector OldLoc;
 	local float Moved, MostMoved;
 	local string MostMovedName;
+	local int BotPing;
 
 	bCompensationIsActive = true;
+	BotPing = -1;
 
 	// Where everyone stands, before any lift is moved back: moving a lift
 	// (SetLocation) takes everyone standing on it off it. Riders line up with
@@ -770,6 +772,19 @@ function CompensateFor(int Ping, optional Pawn Instigator, optional bool bHitsca
 				Moved = 0;
 			D.CompEnd();
 		}
+		// Tick Interpolation draws only players (bbPlayer). A bot is drawn the
+		// stock way, from the newest update the shooter got, a ping late. Its
+		// snapshots carry no tick number either (UTPlusDummy.FillData), so
+		// CompStartTick found none older than the report and stood the bot
+		// where it is now, plus up to 2 ticks: shots at moving bots missed by
+		// the shooter's whole ping. Rewound by the shooter's ping, as before
+		// Tick Interpolation.
+		if (PRT.IGPlus_bPRTInterp && bbPlayer(DActual) == none) {
+			if (BotPing < 0)
+				BotPing = IGPlus_BotRewindMs(PRT);
+			D.CompStart(BotPing);
+			continue;
+		}
 		// Tick Interpolation: between the two snapshots the shooter's screen
 		// drew the shot's target between.
 		if (PRT.IGPlus_bPRTInterp)
@@ -806,6 +821,19 @@ function CompensateFor(int Ping, optional Pawn Instigator, optional bool bHitsca
 			PD.CompStart(Ping);
 		}
 	}
+}
+
+// A bot's rewind for a shot whose report is a Tick Interpolation position: the
+// shooter's ping (CompStart caps it at PingCompensationMax).
+function int IGPlus_BotRewindMs(bbPlayer Shooter) {
+	local IGPlus_WeaponImplementationBase WB;
+
+	WB = Shooter.IGPlus_GetWeaponImplementationBase();
+	if (WB != none)
+		return int(WB.IGPlus_GetLatencyMs(Shooter, false));
+	if (Shooter.PlayerReplicationInfo != none)
+		return Shooter.PlayerReplicationInfo.Ping;
+	return 0;
 }
 
 // The shooter's own ball with client-side shock balls: its screen shows the
@@ -1799,6 +1827,7 @@ function Mutate(string MutateString, PlayerPawn Sender)
 		Sender.ClientMessage("- SetNetUpdateRate x (Changes how often you update the server on your position, Default: 100)");
 		Sender.ClientMessage("- SetMouseSmoothing x (0/False disables smoothing, 1/True enables smoothing, Default: True)");
 		Sender.ClientMessage("- ShowFPS (Toggles FPS display in top-right corner)");
+		Sender.ClientMessage("- NetGraph (Toggles the network numbers in the bottom-right corner, also mutate netgraph)");
 		if (Sender.PlayerReplicationInfo.bAdmin)
 		{
 			Sender.ClientMessage("InstaGib Plus Admin Commands:");
@@ -1829,6 +1858,11 @@ function Mutate(string MutateString, PlayerPawn Sender)
 		Sender.ClientMessage("- FlakClientSideAnimations x (0 = Disabled, 1 = Enabled)");
 		Sender.ClientMessage("- SniperClientSideAnimations x (0 = Disabled, 1 = Enabled)");
 		Sender.ClientMessage("- TranslocatorClientSideAnimations x (0 = Disabled, 1 = Enabled)");
+	}
+	else if (MutateString ~= "netgraph")
+	{
+		if (bbPlayer(Sender) != None)
+			bbPlayer(Sender).IGPlus_ClientToggleNetGraph();
 	}
 	else if (MutateString ~= "ready")
 	{

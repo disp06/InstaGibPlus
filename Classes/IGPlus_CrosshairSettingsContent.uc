@@ -68,6 +68,19 @@ var localized string SmoothText;
 var UWindowSmallCloseButton Btn_Close;
 var UwindowSmallButton Btn_Save;
 
+// Share codes: the layers in the list as one line of text, through the
+// clipboard. IGCH1:<layer>;<layer>;... with each layer
+// Texture,OffsetX,OffsetY,ScaleX,ScaleY,R,G,B,A,Style,Smooth.
+// A pasted code replaces the layers in the list; Save keeps them.
+var IGPlus_Button Btn_CopyCode;
+var IGPlus_Button Btn_PasteCode;
+var localized string CopyCodeText;
+var localized string PasteCodeText;
+var localized string CodeCopiedText;
+var localized string CodePastedText;
+var localized string CodeBadText;
+const IGPLUS_CH_CODE_PREFIX = "IGCH1:";
+
 function CopyCrosshairLayers() {
 	local bbPlayer P;
 	local bbCHSpectator Spec;
@@ -210,6 +223,10 @@ function Created() {
 	Btn_AddLayer.SetText("+");
 	Btn_RemLayer = IGPlus_Button(CreateControl(class'IGPlus_Button', 30, 10, 16, 16));
 	Btn_RemLayer.SetText("-");
+	Btn_CopyCode = IGPlus_Button(CreateControl(class'IGPlus_Button', 56, 10, 64, 16));
+	Btn_CopyCode.SetText(CopyCodeText);
+	Btn_PasteCode = IGPlus_Button(CreateControl(class'IGPlus_Button', 124, 10, 64, 16));
+	Btn_PasteCode.SetText(PasteCodeText);
 
 	Lbl_Scale = IGPlus_Label(CreateControl(class'IGPlus_Label', 276, 10, 64, 16));
 	Lbl_Scale.SetText(ScaleText);
@@ -381,6 +398,179 @@ function Created() {
 	Btn_Save.SetText(class'IGPlus_SettingsScroll'.default.SaveButtonText);
 }
 
+// The layers in the list, as a share code.
+function string MakeShareCode() {
+	local IGPlus_CrosshairLayersListItem L;
+	local string Code;
+	local int n;
+
+	Code = IGPLUS_CH_CODE_PREFIX;
+	for (L = IGPlus_CrosshairLayersListItem(LB_Layers.Items.Next); L != none && n < 10; L = IGPlus_CrosshairLayersListItem(L.Next)) {
+		if (n > 0)
+			Code = Code $ ";";
+		Code = Code $ L.Texture
+			$ "," $ L.OffsetX $ "," $ L.OffsetY
+			$ "," $ class'StringUtils'.static.FormatFloat(L.ScaleX, 3)
+			$ "," $ class'StringUtils'.static.FormatFloat(L.ScaleY, 3)
+			$ "," $ L.Color.R $ "," $ L.Color.G $ "," $ L.Color.B $ "," $ L.Color.A
+			$ "," $ L.Style;
+		if (L.bSmooth)
+			Code = Code $ ",1";
+		else
+			Code = Code $ ",0";
+		n++;
+	}
+	return Code;
+}
+
+// The text up to Sep, taken off the front of S. All of S when Sep isn't in it.
+static function string NextToken(out string S, string Sep) {
+	local int i;
+	local string T;
+
+	i = InStr(S, Sep);
+	if (i < 0) {
+		T = S;
+		S = "";
+	} else {
+		T = Left(S, i);
+		S = Mid(S, i + Len(Sep));
+	}
+	return T;
+}
+
+// A texture name of a code: Package.Name, letters, digits, '_' and '.' only,
+// and short. Empty is the default texture.
+static function bool IsSafeTextureName(string T) {
+	local int i, c;
+
+	if (Len(T) > 64)
+		return false;
+	for (i = 0; i < Len(T); i++) {
+		c = Asc(Mid(T, i, 1));
+		if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 || c == 46)
+			continue;
+		return false;
+	}
+	return true;
+}
+
+// A whole number of a code: an optional '-' and digits, nothing else.
+static function bool IsIntToken(string T) {
+	local int i, c;
+
+	if (Len(T) == 0 || Len(T) > 6)
+		return false;
+	for (i = 0; i < Len(T); i++) {
+		c = Asc(Mid(T, i, 1));
+		if (c >= 48 && c <= 57)
+			continue;
+		if (i == 0 && c == 45 && Len(T) > 1)
+			continue;
+		return false;
+	}
+	return true;
+}
+
+// A decimal of a code: an optional '-', digits and at most one '.'.
+static function bool IsFloatToken(string T) {
+	local int i, c, Dots;
+
+	if (Len(T) == 0 || Len(T) > 12)
+		return false;
+	for (i = 0; i < Len(T); i++) {
+		c = Asc(Mid(T, i, 1));
+		if (c >= 48 && c <= 57)
+			continue;
+		if (c == 46 && Dots == 0) {
+			Dots++;
+			continue;
+		}
+		if (i == 0 && c == 45 && Len(T) > 1)
+			continue;
+		return false;
+	}
+	return true;
+}
+
+// Reads a share code into the list of layers. Nothing changes unless the
+// whole code is good: the prefix, 1 to 10 layers of 11 fields, every field
+// of its kind. Numbers are clamped to sane ranges.
+function bool ApplyShareCode(string Code) {
+	local string Rest, LayerStr, F[11];
+	local string Textures[10];
+	local int Ints[100];
+	local float Scales[20];
+	local int n, i, k;
+	local IGPlus_CrosshairLayersListItem Item;
+
+	Code = class'StringUtils'.static.Trim(Code);
+	if (Left(Code, Len(IGPLUS_CH_CODE_PREFIX)) != IGPLUS_CH_CODE_PREFIX)
+		return false;
+	Rest = Mid(Code, Len(IGPLUS_CH_CODE_PREFIX));
+	if (Len(Rest) == 0 || Len(Rest) > 2000)
+		return false;
+
+	while (Len(Rest) > 0) {
+		if (n >= 10)
+			return false;
+		LayerStr = NextToken(Rest, ";");
+		for (i = 0; i < 11; i++) {
+			if (i > 0 && Len(LayerStr) == 0)
+				return false; // too few fields
+			F[i] = NextToken(LayerStr, ",");
+		}
+		if (Len(LayerStr) > 0)
+			return false; // too many fields
+		if (IsSafeTextureName(F[0]) == false)
+			return false;
+		for (i = 1; i < 11; i++) {
+			if (i == 3 || i == 4) {
+				if (IsFloatToken(F[i]) == false)
+					return false;
+			} else if (IsIntToken(F[i]) == false) {
+				return false;
+			}
+		}
+		Textures[n] = F[0];
+		Ints[n*10 + 0] = Clamp(int(F[1]), -4096, 4096);  // OffsetX
+		Ints[n*10 + 1] = Clamp(int(F[2]), -4096, 4096);  // OffsetY
+		Scales[n*2 + 0] = FClamp(float(F[3]), 0.01, 64.0);
+		Scales[n*2 + 1] = FClamp(float(F[4]), 0.01, 64.0);
+		Ints[n*10 + 2] = Clamp(int(F[5]), 0, 255);       // R
+		Ints[n*10 + 3] = Clamp(int(F[6]), 0, 255);       // G
+		Ints[n*10 + 4] = Clamp(int(F[7]), 0, 255);       // B
+		Ints[n*10 + 5] = Clamp(int(F[8]), 0, 255);       // A
+		Ints[n*10 + 6] = Clamp(int(F[9]), 1, 4);         // Style
+		Ints[n*10 + 7] = Clamp(int(F[10]), 0, 1);        // Smooth
+		n++;
+	}
+	if (n == 0)
+		return false;
+
+	LB_Layers.Items.Clear();
+	for (k = 0; k < n; k++) {
+		Item = IGPlus_CrosshairLayersListItem(LB_Layers.Items.CreateItem(LB_Layers.ListClass));
+		if (Item == none)
+			continue;
+		Item.Index   = k;
+		Item.Texture = Textures[k];
+		Item.Tex     = none;
+		Item.OffsetX = Ints[k*10 + 0];
+		Item.OffsetY = Ints[k*10 + 1];
+		Item.ScaleX  = Scales[k*2 + 0];
+		Item.ScaleY  = Scales[k*2 + 1];
+		Item.Color.R = Ints[k*10 + 2];
+		Item.Color.G = Ints[k*10 + 3];
+		Item.Color.B = Ints[k*10 + 4];
+		Item.Color.A = Ints[k*10 + 5];
+		Item.Style   = Ints[k*10 + 6];
+		Item.bSmooth = Ints[k*10 + 7] != 0;
+		LB_Layers.Items.AppendItem(Item);
+	}
+	return true;
+}
+
 function int FindHighestIndex() {
 	local int i;
 	local IGPlus_CrosshairLayersListItem Item;
@@ -527,6 +717,20 @@ function Notify(UWindowDialogControl C, byte E) {
 		} else if (C == Btn_Save) {
 			Save();
 			Load();
+		} else if (C == Btn_CopyCode) {
+			GetPlayerOwner().CopyToClipboard(MakeShareCode());
+			GetPlayerOwner().ClientMessage(CodeCopiedText);
+		} else if (C == Btn_PasteCode) {
+			if (ApplyShareCode(GetPlayerOwner().PasteFromClipboard())) {
+				LB_Layers.SelectedItem = none;
+				LastSelected = none;
+				bUpdatingControls = true;
+				FillControlsFor(none);
+				bUpdatingControls = false;
+				GetPlayerOwner().ClientMessage(CodePastedText);
+			} else {
+				GetPlayerOwner().ClientMessage(CodeBadText);
+			}
 		}
 	} else if (E == DE_Change) {
 		if (C == Edit_Texture && Edit_Texture.EditBox.bCanEdit) {
@@ -692,6 +896,11 @@ function Paint(Canvas C, float X, float Y) {
 }
 
 defaultproperties {
+	CopyCodeText="Copy Code"
+	PasteCodeText="Paste Code"
+	CodeCopiedText="Crosshair code copied to the clipboard"
+	CodePastedText="Crosshair code pasted: press Save to keep it"
+	CodeBadText="The clipboard holds no valid crosshair code (IGCH1:...)"
 	ScaleText="Scale"
 	OffsetText="Offset"
 	TextureText="Texture"

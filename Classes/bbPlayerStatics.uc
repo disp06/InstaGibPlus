@@ -98,6 +98,55 @@ end:
 	class'CanvasUtils'.static.RestoreCanvas(C);
 }
 
+// NetGraph: bottom right, one line each. Ping is the server's number, which
+// holds the Adaptive Buffering delay. Jitter: how much our moves' round trips
+// vary. Interp: the delay others are drawn with. Buffer: the delay the server
+// runs our moves with (Adaptive Buffering). Last Rewind: how far back the
+// server stood the others for our last rifle or sniper hit.
+// Packet loss is not shown: UnrealScript can't read the connection's counts.
+static function DrawNetGraph(Canvas C, HUD MyHud, ClientSettings Settings, bbPlayer P) {
+	local string Lines[5];
+	local float X, Y, W, LineH;
+	local float InterpMs;
+	local int i, Ping;
+
+	if (Settings == None || Settings.bShowNetGraph == false || P == None || ChallengeHUD(MyHud) == None)
+		return;
+
+	Ping = 0;
+	if (P.PlayerReplicationInfo != None)
+		Ping = P.PlayerReplicationInfo.Ping;
+	Lines[0] = "Ping:" @ Ping @ "ms";
+	Lines[1] = "Jitter:" @ class'StringUtils'.static.FormatFloat(P.IGPlus_NG_JitterMs(), 1) @ "ms";
+	InterpMs = P.IGPlus_NG_InterpMs();
+	if (InterpMs < 0.0)
+		Lines[2] = "Interp: stock";
+	else
+		Lines[2] = "Interp:" @ int(InterpMs + 0.5) @ "ms";
+	Lines[3] = "Buffer:" @ P.IGPlus_ABDelayMs @ "ms";
+	Lines[4] = "Last Rewind:" @ P.IGPlus_LastHitRewindMs @ "ms";
+
+	class'CanvasUtils'.static.SaveCanvas(C);
+	C.Style = ERenderStyle.STY_Translucent;
+	C.DrawColor = ChallengeHud(MyHud).WhiteColor;
+	C.Font = ChallengeHud(MyHud).MyFonts.GetSmallestFont(C.ClipX);
+
+	W = 0;
+	for (i = 0; i < arraycount(Lines); i++) {
+		C.TextSize(Lines[i], X, LineH);
+		if (X > W)
+			W = X;
+	}
+	// Above the bottom edge, clear of the weapon list and the console line.
+	Y = C.ClipY * 0.80 - LineH * arraycount(Lines);
+	for (i = 0; i < arraycount(Lines); i++) {
+		C.SetPos(C.ClipX - W - 8, Y + i * LineH);
+		C.DrawText(Lines[i], false);
+	}
+
+	class'CanvasUtils'.static.RestoreCanvas(C);
+}
+
 static function DrawCrosshair(Canvas C, ClientSettings Settings) {
 	local float X, Y;
 	local float XLength, YLength;

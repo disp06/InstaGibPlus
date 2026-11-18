@@ -89,6 +89,9 @@ function FillData(UTPlusSnapshot D) {
 	D.ServerTimeStamp = Level.TimeSeconds;
 	D.bHeld = bbPlayer(Actual) != None && bbPlayer(Actual).IGPlus_ABHeld;
 	D.bNoMove = false;
+	// A bot has no tick number: no Tick Interpolation rewind uses it
+	// (UTPure.CompensateFor). 0, not what a reused snapshot held before.
+	D.Tick = 0;
 	if (bbPlayer(Actual) != None && bbPlayer(Actual).zzUTPure != None)
 		D.Tick = bbPlayer(Actual).zzUTPure.IGPlus_GlobalTick;
 
@@ -159,7 +162,24 @@ event Tick(float DeltaTime) {
 			Data[DataIndex].bNoMove = bNoMoveSnap;
 			DataIndex = (DataIndex + 1) % arraycount(Data);
 		}
-	} else { // Handle non-PlayerPawn Actual
+	} else { // Handle non-PlayerPawn Actual (a bot)
+		// Dead: emptied once, as for a player above. Otherwise a rewind just
+		// after the respawn found the snapshots of the last life (the body,
+		// its collision already off) and the new bot could not be hit for
+		// the shooter's ping.
+		if (Actual.Health <= 0) {
+			if (!bHistoryCleared) {
+				for (i = 0; i < arraycount(Data); i++)
+					if (Data[i] != None)
+						Data[i].ServerTimeStamp = 0.0;
+				DataIndex = 0;
+				if (bCompActive)
+					CompEnd();
+				bHistoryCleared = true;
+			}
+			return;
+		}
+		bHistoryCleared = false;
 		if (Data[DataIndex] == None)
 			Data[DataIndex] = new class'UTPlusSnapshot';
 		FillData(Data[DataIndex]);

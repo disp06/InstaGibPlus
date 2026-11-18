@@ -339,9 +339,21 @@ simulated function ClientPlayEffects()
 }
 
 function TraceFire(float Accuracy) {
+	local Pawn PawnOwner;
+
 	if (Role == ROLE_Authority && Level.NetMode != NM_Client && IsDetActive())
 		return;
-	TraceFireAt(Pawn(Owner).ViewRotation, Owner.Location, true);
+	PawnOwner = Pawn(Owner);
+	if (PawnOwner == None)
+		return;
+	// Players' shots that wait in this tick were fired first (Fire Time
+	// Order, ST_SuperShockRifle.TraceFire). A dead bot does not fire.
+	if (Level.NetMode != NM_Standalone && Level.NetMode != NM_Client) {
+		class'bbPlayer'.static.IGPlus_RunWaitingShots(Level);
+		if (bDeleteMe || Owner != PawnOwner || PawnOwner.bDeleteMe || PawnOwner.Health <= 0)
+			return;
+	}
+	TraceFireAt(PawnOwner.ViewRotation, Owner.Location, true);
 }
 
 function DeterministicTraceFire(rotator ShotRot, vector ShotLoc) {
@@ -429,6 +441,8 @@ function ProcessTraceHit(Actor Other, Vector HitLocation, Vector HitNormal, Vect
 		if (Other.IsA('Mover')) {
 			Spawn(class'UT_HeavyWallHitEffect',,, HitLocation+HitNormal, Rotator(HitNormal));
 		}
+		if (bbP != None && Pawn(Other) != None)
+			bbP.IGPlus_NoteHitRewind(Pawn(Other));
 
 		// Headshot handling
 		if (Other.bIsPawn && CheckHeadShot(Pawn(Other), HitLocation, X) &&

@@ -117,6 +117,7 @@ enum EFraggerScopeChoice {
 var config EFraggerScopeChoice FraggerScopeChoice;
 
 var config bool   bEnableNetStats;
+var config bool   bShowNetGraph; // NetGraph text block, bottom right (bbPlayerStatics.DrawNetGraph)
 var config bool   bNetStatsUnconfirmedTime;
 var config bool   bNetStatsLocationError;
 var config bool   bNetStatsFrameTime;
@@ -618,6 +619,7 @@ simulated function string DumpSettings() {
 		GetSetting("KillFeedScale")$
 		GetSetting("FraggerScopeChoice")$
 		GetSetting("bEnableNetStats")$
+		GetSetting("bShowNetGraph")$
 		GetSetting("bNetStatsUnconfirmedTime")$
 		GetSetting("bNetStatsLocationError")$
 		GetSetting("bNetStatsFrameTime")$
@@ -732,6 +734,7 @@ defaultproperties
 	KillFeedScale=1.0
 	FraggerScopeChoice=FSC_Moveable
 	bEnableNetStats=False
+	bShowNetGraph=False
 	bNetStatsUnconfirmedTime=True
 	bNetStatsLocationError=True
 	bNetStatsFrameTime=False

@@ -321,6 +321,14 @@ function TraceFire(float Accuracy) {
 	if (PawnOwner == none)
 		return;
 
+	// Players' shots that wait in this tick were fired first (Fire Time
+	// Order). One of them may kill our owner: a dead bot does not fire.
+	if (Level.NetMode != NM_Standalone && Level.NetMode != NM_Client) {
+		class'bbPlayer'.static.IGPlus_RunWaitingShots(Level);
+		if (bDeleteMe || Owner != PawnOwner || PawnOwner.bDeleteMe || PawnOwner.Health <= 0)
+			return;
+	}
+
 	Owner.MakeNoise(PawnOwner.SoundDampening);
 	GetAxes(PawnOwner.ViewRotation, X, Y, Z);
 	if (PlayerPawn(Owner) != None)
@@ -481,6 +489,8 @@ function ProcessTraceHit(Actor Other, Vector HitLocation, Vector HitNormal, Vect
 
 	if ( (Other != self) && (Other != Owner) && (Other != None) )
 	{
+		if (bbP != None && Pawn(Other) != None)
+			bbP.IGPlus_NoteHitRewind(Pawn(Other));
 		Other.TakeDamage(HitDamage, PawnOwner, HitLocation, 60000.0*X, MyDamageType);
 	}
 }

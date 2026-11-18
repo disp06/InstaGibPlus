@@ -141,6 +141,9 @@ var localized string MoreInformationText;
 	var UWindowCheckbox Chk_EnableNetStats;
 	var localized string EnableNetStatsText;
 	var localized string EnableNetStatsHelp;
+	var UWindowCheckbox Chk_ShowNetGraph;
+	var localized string ShowNetGraphText;
+	var localized string ShowNetGraphHelp;
 
 	var UWindowCheckbox Chk_NetStatUnconfirmedTime;
 	var localized string NetStatUnconfirmedTimeText;
@@ -972,6 +975,7 @@ function Created() {
 
 	Lbl_NetStats = CreateSeparator(NetStatsText);
 	Chk_EnableNetStats = CreateCheckbox(EnableNetStatsText, EnableNetStatsHelp);
+	Chk_ShowNetGraph = CreateCheckbox(ShowNetGraphText, ShowNetGraphHelp);
 	Chk_NetStatUnconfirmedTime = CreateCheckbox(NetStatUnconfirmedTimeText, NetStatUnconfirmedTimeHelp);
 	Chk_NetStatsLocationError = CreateCheckbox(NetStatsLocationErrorText, NetStatsLocationErrorHelp);
 	Chk_NetStatsFrameTime = CreateCheckbox(NetStatsFrameTimeText, NetStatsFrameTimeHelp);
@@ -1157,6 +1161,7 @@ function Load() {
 	Chk_LocationOffsetFix.bChecked = Settings.bEnableLocationOffsetFix;
 
 	Chk_EnableNetStats.bChecked = Settings.bEnableNetStats;
+	Chk_ShowNetGraph.bChecked = Settings.bShowNetGraph;
 	Chk_NetStatUnconfirmedTime.bChecked = Settings.bNetStatsUnconfirmedTime;
 	Chk_NetStatsLocationError.bChecked = Settings.bNetStatsLocationError;
 	Chk_NetStatsFrameTime.bChecked = Settings.bNetStatsFrameTime;
@@ -1286,6 +1291,7 @@ function LoadForcedSettings() {
 	LockIfForced(Chk_ShowDebugDataOnScreen, "bShowDebugDataOnScreen", P);
 	LockIfForced(Chk_LocationOffsetFix, "bEnableLocationOffsetFix", P);
 	LockIfForced(Chk_EnableNetStats, "bEnableNetStats", P);
+	LockIfForced(Chk_ShowNetGraph, "bShowNetGraph", P);
 	LockIfForced(Chk_NetStatUnconfirmedTime, "bNetStatsUnconfirmedTime", P);
 	LockIfForced(Chk_NetStatsLocationError, "bNetStatsLocationError", P);
 	LockIfForced(Chk_NetStatsFrameTime, "bNetStatsFrameTime", P);
@@ -1386,6 +1392,7 @@ function Save() {
 	Settings.bEnableLocationOffsetFix = Chk_LocationOffsetFix.bChecked;
 
 	Settings.bEnableNetStats = Chk_EnableNetStats.bChecked;
+	Settings.bShowNetGraph = Chk_ShowNetGraph.bChecked;
 	Settings.bNetStatsUnconfirmedTime = Chk_NetStatUnconfirmedTime.bChecked;
 	Settings.bNetStatsLocationError = Chk_NetStatsLocationError.bChecked;
 	Settings.bNetStatsFrameTime = Chk_NetStatsFrameTime.bChecked;
@@ -1615,6 +1622,8 @@ defaultproperties
 
 		EnableNetStatsText="Enable NetStats"
 		EnableNetStatsHelp="If checked, shows a graph at the top with information about network communication"
+		ShowNetGraphText="Show NetGraph"
+		ShowNetGraphHelp="If checked, shows ping, jitter, the delay others are drawn with, your Adaptive Buffering delay and the server's rewind for your last rifle or sniper hit, bottom right. Console: NetGraph, or mutate netgraph"
 
 		NetStatUnconfirmedTimeText="Show Unconfirmed Time"
 		NetStatUnconfirmedTimeHelp="If checked, the netstats graph contains time the client simulated, but which the server hasnt acknowledged yet"

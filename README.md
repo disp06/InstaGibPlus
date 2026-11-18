@@ -108,6 +108,7 @@ These settings can be found in **InstaGibPlus.ini** under section **\[ClientSett
 1. [KillFeedScale](#killfeedscale)
 1. [FraggerScopeChoice](#fraggerscopechoice)
 1. [bEnableNetStats](#benablenetstats)
+1. [bShowNetGraph](#bshownetgraph)
 1. [bNetStatsUnconfirmedTime](#bnetstatsunconfirmedtime)
 1. [bNetStatsLocationError](#bnetstatslocationerror)
 1. [bNetStatsFrameTime](#bnetstatsframetime)
@@ -735,6 +736,20 @@ Which scope the FraggerRifle uses when zoming.
 
 If `True`, shows a graph containing statistics related to the netcode. for simulated game-time still unconfirmed by server (top), as well as a graph for the distance players are away from where the server has them (bottom).
 
+## bShowNetGraph
+**Type: bool**  
+**Default: False**  
+
+If `True`, shows a small block of network numbers in the bottom right corner:
+
+* Ping: the ping the server measures for you (it holds your Adaptive Buffering delay).
+* Jitter: how much the round trips of your moves vary, the mean distance from their average over the last 32.
+* Interp: the delay other players are drawn with (Tick Interpolation or Snapshot Interpolation), `stock` without either.
+* Buffer: the delay the server runs your moves with (Adaptive Buffering).
+* Last Rewind: how far back the server stood the other players for your last hit with the SuperShockRifle or the sniper rifle, capped at PingCompensationMax.
+
+Packet loss is not shown: UnrealScript can not read the connection's packet counts. The console command `NetGraph` (or `mutate netgraph`) turns it on and off.
+
 ## bNetStatsUnconfirmedTime
 **Type: bool**  
 **Default: True**  
@@ -897,6 +912,8 @@ In the Crosshair Factory window the presets are in the list on the right, each w
 * `Save` writes the layers and the name into the picked preset. If you pick another preset before you save, your changes to the layers are gone.
 
 A crosshair you made before presets existed is your first preset, named `Crosshair 1`.
+
+Share codes: `Copy Code` puts the layers in the list on the clipboard as one line of text, `IGCH1:` followed by one entry per layer, separated by `;`. Each entry is `Texture,OffsetX,OffsetY,ScaleX,ScaleY,R,G,B,A,Style,Smooth`. `Paste Code` reads such a line from the clipboard and replaces the layers in the list with it; press `Save` to keep them in the picked preset. A code that is not valid changes nothing: it needs 1 to 10 layers, a texture name of letters, digits, `_` and `.`, and numbers in every other field. Offsets are kept within -4096 to 4096, scales within 0.01 to 64, colors within 0 to 255 and the style within 1 to 4.
 
 Every preset has its own section in InstaGibPlus.ini, `[CrosshairPreset1]` to `[CrosshairPreset16]`, with `PresetName` and ten `Layers` in the format of [CrosshairLayers](#crosshairlayers). An empty `PresetName` means the slot is free. The picked preset is read from `CrosshairLayers` in `[ClientSettings]`. If you change it by hand, change it there and not in its own section. An older IG+ version on another server reads the same file and draws `CrosshairLayers`, so it draws the picked preset too.
 

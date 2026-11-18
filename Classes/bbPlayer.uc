@@ -690,6 +690,12 @@ var float IGPlus_ABMoveLen;         // the client's usual move interval (average
 var float IGPlus_ABMeasureStart;    // Level.TimeSeconds the arrival measure (re)started
 var float IGPlus_ABPeak;            // usual lateness: the latest packets of the last seconds
 var int IGPlus_ABDelayMs;           // IGPlus_ABDelay in real ms, 0 when not queued. Sent to our client.
+var int IGPlus_LastHitRewindMs;     // how far the server rewound for our last rifle or sniper hit, ms. Sent to our client (NetGraph)
+// Client, NetGraph: round trips of our moves (the time from a move to the
+// server's answer to it), the last 32, for the jitter.
+var float IGPlus_NG_Rtt[32];
+var int IGPlus_NG_RttIdx, IGPlus_NG_RttNum;
+var float IGPlus_NG_LastAckTS;
 var float IGPlus_ABLogTS;
 var float IGPlus_ABEnterTime;
 // The arrival measure. It runs for every player, whatever the setting.
@@ -1207,6 +1213,7 @@ replication
 		IGPlus_DetServerShotTS,
 		IGPlus_TI_ServerTick,
 		IGPlus_ABDelayMs,
+		IGPlus_LastHitRewindMs,
 		KillCamDelay,
 		KillCamDuration,
 		LastKiller,
@@ -1296,6 +1303,7 @@ replication
 // Functions Server -> Client
 	reliable if ( Role == ROLE_Authority )
 		IGPlusMenu,
+		IGPlus_ClientToggleNetGraph,
 		Ready,
 		xxClientSwJumpPad,
 		xxSetDefaultWeapon,
@@ -7049,6 +7057,21 @@ function float IGPlus_ShotAgo(float StepTS) {
 	if (PingMs == 0.0 && PlayerReplicationInfo != None)
 		PingMs = PlayerReplicationInfo.Ping;
 	return Late + 0.0005 * PingMs * Level.TimeDilation;
+}
+
+// Server: a shot that does not wait (a bot's, fired now) first runs the
+// players' shots that wait for the end of this tick. All of those were fired
+// before now (IGPlus_ShotAgo), so by Fire Time Order they go first. Before,
+// a bot that fired in the same tick ran ahead of them and a player's earlier
+// shot became a shot from the dead.
+static function IGPlus_RunWaitingShots(LevelInfo L) {
+	local Pawn P;
+
+	for (P = L.PawnList; P != None; P = P.NextPawn)
+		if (bbPlayer(P) != None && bbPlayer(P).zzUTPure != None) {
+			bbPlayer(P).zzUTPure.IGPlus_FlushShots();
+			return;
+		}
 }
 
 // Server: a rifle or sniper shot waits for the end of the tick's packets.
@@ -17225,6 +17248,8 @@ event PostRender( canvas zzCanvas )
 	}
 
 	PlayerStatics.DrawFPS(zzCanvas, MyHud, Settings, zzTick);
+	IGPlus_NG_Sample();
+	class'bbPlayerStatics'.static.DrawNetGraph(zzCanvas, MyHud, Settings, self);
 
 	PlayerStatics.DrawHitMarker(zzCanvas, Settings, zzTick);
 	if (HitMarkerTestDamage > 0 && PlayerStatics.default.HitMarkerLifespan == 0) {
@@ -17326,6 +17351,92 @@ simulated function xxRenderLogo(canvas zzC)
 		zzFadeValue = 1.0;
 
 	xxDrawLogo(zzC, 10, zzC.ClipY - 128, zzFadeValue);
+}
+
+// NetGraph: a small block of network numbers, bottom right.
+exec function NetGraph() {
+	IGPlus_ClientToggleNetGraph();
+}
+
+// Also from "mutate netgraph" (UTPure.Mutate).
+simulated function IGPlus_ClientToggleNetGraph() {
+	if (Settings == None || IGPlus_RefuseForced("bShowNetGraph", "NetGraph"))
+		return;
+	Settings.bShowNetGraph = !Settings.bShowNetGraph;
+	IGPlus_SaveSettings();
+	if (Settings.bShowNetGraph)
+		ClientMessage("NetGraph shown!", 'IGPlus');
+	else
+		ClientMessage("NetGraph hidden!", 'IGPlus');
+}
+
+// Client, every frame: a new round trip when the server has answered a newer
+// move of ours. Its frame adds up to one frame to it.
+simulated function IGPlus_NG_Sample() {
+	local float Rtt;
+
+	if (Settings == None || Settings.bShowNetGraph == false || Level.NetMode != NM_Client)
+		return;
+	if (CurrentTimeStamp <= IGPlus_NG_LastAckTS) {
+		// A new map or a reconnect starts our clock again.
+		if (CurrentTimeStamp < IGPlus_NG_LastAckTS - 1.0)
+			IGPlus_NG_LastAckTS = CurrentTimeStamp;
+		return;
+	}
+	IGPlus_NG_LastAckTS = CurrentTimeStamp;
+	Rtt = (Level.TimeSeconds - CurrentTimeStamp) / Level.TimeDilation;
+	if (Rtt < 0.0 || Rtt > 2.0)
+		return;
+	IGPlus_NG_Rtt[IGPlus_NG_RttIdx] = Rtt;
+	IGPlus_NG_RttIdx = (IGPlus_NG_RttIdx + 1) % arraycount(IGPlus_NG_Rtt);
+	if (IGPlus_NG_RttNum < arraycount(IGPlus_NG_Rtt))
+		IGPlus_NG_RttNum++;
+}
+
+// Client, NetGraph: how much our round trips vary, in ms (the mean distance
+// from their average, last 32).
+simulated function float IGPlus_NG_JitterMs() {
+	local int i;
+	local float Avg, Dev;
+
+	if (IGPlus_NG_RttNum < 2)
+		return 0.0;
+	for (i = 0; i < IGPlus_NG_RttNum; i++)
+		Avg += IGPlus_NG_Rtt[i];
+	Avg /= IGPlus_NG_RttNum;
+	for (i = 0; i < IGPlus_NG_RttNum; i++)
+		Dev += Abs(IGPlus_NG_Rtt[i] - Avg);
+	return 1000.0 * Dev / IGPlus_NG_RttNum;
+}
+
+// Client, NetGraph: the delay other players are drawn with, in ms. -1: drawn
+// the stock way (no delay of ours).
+simulated function float IGPlus_NG_InterpMs() {
+	if (IGPlus_EnableTickInterp && IGPlus_EnableSnapshotInterpolation == false && IGPlus_TI_Clock > 0.0)
+		return 1000.0 * (IGPLUS_TI_MIN_DELAY + IGPlus_TI_Recv) * IGPlus_TI_TickLen / Level.TimeDilation;
+	if (IGPlus_EnableSnapshotInterpolation)
+		return IGPlus_ClientSnapInterpDelayMs;
+	return -1.0;
+}
+
+// Server: a rifle or sniper shot of ours hit Target. How far back the server
+// stood the others for it, for our NetGraph (UTPure.CompensateFor).
+function IGPlus_NoteHitRewind(Pawn Target) {
+	local IGPlus_WeaponImplementationBase WB;
+	local WeaponSettingsRepl WS;
+	local float Ms;
+
+	WB = IGPlus_GetWeaponImplementationBase();
+	WS = GetWeaponSettings();
+	if (WB == None || WS == None || WS.bEnablePingCompensation == false) {
+		IGPlus_LastHitRewindMs = 0;
+		return;
+	}
+	if (bbPlayer(Target) == None && IGPlus_bPRTInterp && IGPlus_PRTUsable())
+		Ms = WB.IGPlus_GetLatencyMs(self, false);
+	else
+		Ms = WB.IGPlus_GetHitscanRewindMs(self);
+	IGPlus_LastHitRewindMs = Clamp(int(Ms), 0, WS.PingCompensationMax);
 }
 
 exec function ShowFPS() {
